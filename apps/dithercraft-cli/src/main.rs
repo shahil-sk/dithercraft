@@ -1,3 +1,5 @@
+mod mcp;
+
 use clap::{Parser, Subcommand};
 use dither_core::{ImageBuffer, algorithms::*, color::RgbColor, palette::Palette, renderers::*, vector::BlackVectorIsolation};
 use image::ImageReader;
@@ -44,7 +46,11 @@ enum Commands {
         algo: String,
         #[arg(short, long, default_value = "gameboy")]
         palette: String,
+        #[arg(long, default_value = "{name}_{algo}_{palette}")]
+        pattern: String,
     },
+    /// Run Model Context Protocol (MCP) JSON-RPC server over stdio
+    Mcp,
     /// Run internal latency and throughput micro-benchmarks
     Bench,
 }
@@ -121,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Isolated black vectors from {} into {} in {:.2}ms", input.display(), output.display(), elapsed.as_secs_f64() * 1000.0);
         }
 
-        Commands::Batch { input_dir, output_dir, algo, palette } => {
+        Commands::Batch { input_dir, output_dir, algo, palette, pattern } => {
             let start = Instant::now();
             let pal = select_palette(&palette);
             let algo_name = algo.clone();
@@ -151,7 +157,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .par_iter()
                 .map(|in_path| {
                     let file_stem = in_path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
-                    let out_path = output_dir.join(format!("{}_{}.png", file_stem, algo_name));
+                    let timestamp =
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs().to_string()).unwrap_or_default();
+                    let safe_palette = pal.name.to_lowercase().replace(' ', "-");
+                    let base_name = pattern
+                        .replace("{name}", file_stem)
+                        .replace("{algo}", &algo_name)
+                        .replace("{palette}", &safe_palette)
+                        .replace("{timestamp}", &timestamp);
+                    let out_path = output_dir.join(format!("{base_name}.png"));
 
                     if let Ok(img) = load_image(in_path) {
                         let algorithm = select_algorithm(&algo_name);
@@ -173,6 +187,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 elapsed.as_secs_f64(),
                 (processed_count as f64) / elapsed.as_secs_f64().max(0.001)
             );
+        }
+
+        Commands::Mcp => {
+            mcp::run_mcp_server()?;
         }
 
         Commands::Bench => {

@@ -126,7 +126,18 @@ pub struct DitherCraftApp {
     debounce_mode: bool,
     status_text: String,
     render_latency_ms: f64,
-    _split_slider: f32,
+
+    // Viewport Split-View
+    split_view_enabled: bool,
+    split_position: f32,
+
+    // Timeline Editor & Transport
+    is_playing: bool,
+    target_fps: u32,
+    loop_mode: bool,
+    timeline_frame: u32,
+    timeline_max_frames: u32,
+    last_frame_instant: Instant,
 
     // Threading channels
     tx: Sender<RenderJobResult>,
@@ -192,7 +203,16 @@ impl DitherCraftApp {
             debounce_mode: false,
             status_text: "Ready".into(),
             render_latency_ms: 0.0,
-            _split_slider: 1.0,
+
+            split_view_enabled: false,
+            split_position: 0.5,
+
+            is_playing: false,
+            target_fps: 30,
+            loop_mode: true,
+            timeline_frame: 0,
+            timeline_max_frames: 60,
+            last_frame_instant: Instant::now(),
 
             tx,
             rx,
@@ -279,14 +299,47 @@ impl DitherCraftApp {
 
     fn update_texture(&mut self, ctx: &egui::Context) {
         if let Some(res) = self.rendered_image.as_ref() {
-            let mut color_data = Vec::with_capacity((res.width * res.height * 4) as usize);
-            for chunk in res.data.chunks_exact(3) {
-                color_data.push(chunk[0]);
-                color_data.push(chunk[1]);
-                color_data.push(chunk[2]);
-                color_data.push(255);
+            let width = res.width as usize;
+            let height = res.height as usize;
+            let mut color_data = Vec::with_capacity(width * height * 4);
+
+            if self.split_view_enabled
+                && let Some(src) = self.source_image.as_ref()
+                && src.width == res.width
+                && src.height == res.height
+            {
+                let split_x = (res.width as f32 * self.split_position).clamp(0.0, res.width as f32) as usize;
+                for y in 0..height {
+                    for x in 0..width {
+                        let idx = (y * width + x) * 3;
+                        if x == split_x {
+                            color_data.push(255);
+                            color_data.push(255);
+                            color_data.push(255);
+                            color_data.push(255);
+                        } else if x < split_x {
+                            color_data.push(src.data[idx]);
+                            color_data.push(src.data[idx + 1]);
+                            color_data.push(src.data[idx + 2]);
+                            color_data.push(255);
+                        } else {
+                            color_data.push(res.data[idx]);
+                            color_data.push(res.data[idx + 1]);
+                            color_data.push(res.data[idx + 2]);
+                            color_data.push(255);
+                        }
+                    }
+                }
+            } else {
+                for chunk in res.data.chunks_exact(3) {
+                    color_data.push(chunk[0]);
+                    color_data.push(chunk[1]);
+                    color_data.push(chunk[2]);
+                    color_data.push(255);
+                }
             }
-            let color_image = ColorImage::from_rgba_unmultiplied([res.width as usize, res.height as usize], &color_data);
+
+            let color_image = ColorImage::from_rgba_unmultiplied([width, height], &color_data);
             self.texture = Some(ctx.load_texture("rendered_preview", color_image, TextureOptions::NEAREST));
         }
     }
@@ -665,6 +718,58 @@ impl eframe::App for DitherCraftApp {
             }
         });
 
+        // Timeline & Viewport Control Toolbar
+        egui::TopBottomPanel::bottom("timeline_panel").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                // Split View controls
+                let mut split_changed = false;
+                if ui.checkbox(&mut self.split_view_enabled, "Split View (Before / After)").changed() {
+                    split_changed = true;
+                }
+                if self.split_view_enabled && ui.add(egui::Slider::new(&mut self.split_position, 0.0..=1.0).text("Split")).changed() {
+                    split_changed = true;
+                }
+                if split_changed {
+                    self.update_texture(ctx);
+                }
+
+                ui.separator();
+
+                // Timeline Transport controls
+                let play_label = if self.is_playing { "⏸ Pause" } else { "▶ Play" };
+                if ui.button(play_label).clicked() {
+                    self.is_playing = !self.is_playing;
+                    if self.is_playing {
+                        self.last_frame_instant = Instant::now();
+                    }
+                }
+
+                if ui.button("⏮").clicked() {
+                    self.timeline_frame = self.timeline_frame.saturating_sub(1);
+                    self.frame_counter = self.timeline_frame;
+                    self.trigger_render();
+                }
+
+                if ui.button("⏭").clicked() {
+                    if self.timeline_frame + 1 < self.timeline_max_frames {
+                        self.timeline_frame += 1;
+                    } else if self.loop_mode {
+                        self.timeline_frame = 0;
+                    }
+                    self.frame_counter = self.timeline_frame;
+                    self.trigger_render();
+                }
+
+                if ui.add(egui::Slider::new(&mut self.timeline_frame, 0..=self.timeline_max_frames).text("Frame")).changed() {
+                    self.frame_counter = self.timeline_frame;
+                    self.trigger_render();
+                }
+
+                ui.add(egui::Slider::new(&mut self.target_fps, 1..=60).text("FPS"));
+                ui.checkbox(&mut self.loop_mode, "Loop");
+            });
+        });
+
         // Bottom Status Bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -681,8 +786,24 @@ impl eframe::App for DitherCraftApp {
             });
         });
 
-        // If temporal noise is running, request repaint
-        if self.temporal_noise_enabled {
+        // Playback & Animation Loop
+        if self.is_playing {
+            let now = Instant::now();
+            let frame_duration = 1.0 / (self.target_fps as f64).max(1.0);
+            if now.duration_since(self.last_frame_instant).as_secs_f64() >= frame_duration {
+                self.last_frame_instant = now;
+                if self.timeline_frame + 1 < self.timeline_max_frames {
+                    self.timeline_frame += 1;
+                } else if self.loop_mode {
+                    self.timeline_frame = 0;
+                } else {
+                    self.is_playing = false;
+                }
+                self.frame_counter = self.timeline_frame;
+                self.trigger_render();
+            }
+            ctx.request_repaint();
+        } else if self.temporal_noise_enabled {
             self.frame_counter = self.frame_counter.wrapping_add(1);
             self.trigger_render();
             ctx.request_repaint();
