@@ -175,3 +175,239 @@ impl TemporalNoisePattern {
         Ok(out)
     }
 }
+
+/// Interpolation mode between timeline keyframes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Interpolation {
+    Step,
+    Linear,
+    SmoothStep,
+}
+
+/// A parameter keyframe at a specific animation frame index.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Keyframe {
+    pub frame: u32,
+    pub value: f32,
+}
+
+impl Keyframe {
+    pub const fn new(frame: u32, value: f32) -> Self {
+        Self { frame, value }
+    }
+}
+
+/// Timeline animation track for interpolating parameters over time.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TimelineTrack {
+    pub name: String,
+    pub interpolation: Interpolation,
+    pub keyframes: Vec<Keyframe>,
+    pub default_value: f32,
+}
+
+impl TimelineTrack {
+    pub fn new(name: impl Into<String>, default_value: f32) -> Self {
+        Self { name: name.into(), interpolation: Interpolation::Linear, keyframes: Vec::new(), default_value }
+    }
+
+    /// Add a keyframe, maintaining ascending order by frame index.
+    pub fn add_keyframe(&mut self, frame: u32, value: f32) {
+        if let Some(pos) = self.keyframes.iter().position(|k| k.frame == frame) {
+            self.keyframes[pos].value = value;
+        } else {
+            let pos = self.keyframes.partition_point(|k| k.frame < frame);
+            self.keyframes.insert(pos, Keyframe::new(frame, value));
+        }
+    }
+
+    /// Evaluate the track value at a given frame index.
+    pub fn eval(&self, frame: u32) -> f32 {
+        if self.keyframes.is_empty() {
+            return self.default_value;
+        }
+        if self.keyframes.len() == 1 {
+            return self.keyframes[0].value;
+        }
+
+        let first = &self.keyframes[0];
+        if frame <= first.frame {
+            return first.value;
+        }
+
+        let last = &self.keyframes[self.keyframes.len() - 1];
+        if frame >= last.frame {
+            return last.value;
+        }
+
+        let idx = self.keyframes.partition_point(|k| k.frame <= frame);
+        let k0 = &self.keyframes[idx - 1];
+        let k1 = &self.keyframes[idx];
+
+        let span = (k1.frame - k0.frame) as f32;
+        if span <= 0.0 {
+            return k0.value;
+        }
+
+        let t = ((frame - k0.frame) as f32 / span).clamp(0.0, 1.0);
+
+        match self.interpolation {
+            Interpolation::Step => k0.value,
+            Interpolation::Linear => k0.value + t * (k1.value - k0.value),
+            Interpolation::SmoothStep => {
+                let ts = t * t * (3.0 - 2.0 * t);
+                k0.value + ts * (k1.value - k0.value)
+            }
+        }
+    }
+}
+
+/// Low-Frequency Oscillator (LFO) waveforms for automated parameter modulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LfoWaveform {
+    Sine,
+    Triangle,
+    Sawtooth,
+    Square,
+    SampleAndHold,
+}
+
+/// Automated LFO parameter modulator over time.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LfoModulator {
+    pub waveform: LfoWaveform,
+    pub frequency: f32,
+    pub amplitude: f32,
+    pub offset: f32,
+    pub phase: f32,
+}
+
+impl LfoModulator {
+    pub const fn new(waveform: LfoWaveform, frequency: f32, amplitude: f32, offset: f32) -> Self {
+        Self { waveform, frequency, amplitude, offset, phase: 0.0 }
+    }
+
+    /// Evaluate the modulated value at frame `frame_idx`.
+    pub fn eval(&self, frame_idx: u32) -> f32 {
+        let t = frame_idx as f32;
+        let cycles = (t * self.frequency + self.phase).rem_euclid(1.0);
+
+        let wave = match self.waveform {
+            LfoWaveform::Sine => (cycles * std::f32::consts::TAU).sin(),
+            LfoWaveform::Triangle => {
+                if cycles < 0.5 {
+                    cycles * 4.0 - 1.0
+                } else {
+                    3.0 - cycles * 4.0
+                }
+            }
+            LfoWaveform::Sawtooth => cycles * 2.0 - 1.0,
+            LfoWaveform::Square => {
+                if cycles < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            LfoWaveform::SampleAndHold => {
+                let step = (t * self.frequency + self.phase).floor() as u64;
+                let hash = step.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((hash >> 32) as f32 / u32::MAX as f32) * 2.0 - 1.0
+            }
+        };
+
+        self.offset + wave * self.amplitude
+    }
+}
+
+/// A single animated frame with image data and display delay in milliseconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimatedFrame {
+    pub buffer: ImageBuffer,
+    pub delay_ms: u32,
+}
+
+impl AnimatedFrame {
+    pub const fn new(buffer: ImageBuffer, delay_ms: u32) -> Self {
+        Self { buffer, delay_ms }
+    }
+}
+
+/// Multi-frame animation sequence supporting playback, timing, and parallel processing.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AnimationSequence {
+    pub frames: Vec<AnimatedFrame>,
+}
+
+impl AnimationSequence {
+    pub const fn new() -> Self {
+        Self { frames: Vec::new() }
+    }
+
+    pub fn with_frames(frames: Vec<AnimatedFrame>) -> Self {
+        Self { frames }
+    }
+
+    pub fn add_frame(&mut self, buffer: ImageBuffer, delay_ms: u32) {
+        self.frames.push(AnimatedFrame::new(buffer, delay_ms));
+    }
+
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// Total duration of the animation sequence in milliseconds.
+    pub fn total_duration_ms(&self) -> u32 {
+        self.frames.iter().map(|f| f.delay_ms).sum()
+    }
+
+    /// Retrieve frame index corresponding to a given time offset in milliseconds.
+    pub fn frame_index_at_time(&self, mut time_ms: u32, looping: bool) -> usize {
+        if self.frames.is_empty() {
+            return 0;
+        }
+
+        let total = self.total_duration_ms();
+        if total == 0 {
+            return 0;
+        }
+
+        if looping {
+            time_ms %= total;
+        } else if time_ms >= total {
+            return self.frames.len() - 1;
+        }
+
+        let mut acc = 0;
+        for (i, f) in self.frames.iter().enumerate() {
+            acc += f.delay_ms;
+            if time_ms < acc {
+                return i;
+            }
+        }
+
+        self.frames.len().saturating_sub(1)
+    }
+
+    /// Process each frame in the sequence in parallel across Rayon worker threads.
+    pub fn process_frames<F>(&self, process_fn: F) -> Result<Self, DitherError>
+    where
+        F: Fn(&ImageBuffer, usize) -> Result<ImageBuffer, DitherError> + Sync + Send,
+    {
+        let processed_frames: Result<Vec<AnimatedFrame>, DitherError> = self
+            .frames
+            .par_iter()
+            .enumerate()
+            .map(|(idx, frame)| {
+                let out_buf = process_fn(&frame.buffer, idx)?;
+                Ok(AnimatedFrame { buffer: out_buf, delay_ms: frame.delay_ms })
+            })
+            .collect();
+
+        Ok(Self { frames: processed_frames? })
+    }
+}

@@ -294,3 +294,81 @@ fn test_palette_kd_tree_acceleration() {
 
     assert_eq!(nearest_linear, nearest_tree);
 }
+
+#[test]
+fn test_temporal_tracks_lfo_and_animation_sequence() {
+    use dither_core::temporal::*;
+
+    // 1. TimelineTrack Keyframing
+    let mut track = TimelineTrack::new("brightness", 0.0);
+    track.interpolation = Interpolation::Linear;
+    track.add_keyframe(0, 0.0);
+    track.add_keyframe(10, 100.0);
+    track.add_keyframe(20, 50.0);
+
+    assert_eq!(track.eval(0), 0.0);
+    assert_eq!(track.eval(5), 50.0);
+    assert_eq!(track.eval(10), 100.0);
+    assert_eq!(track.eval(15), 75.0);
+    assert_eq!(track.eval(20), 50.0);
+    assert_eq!(track.eval(30), 50.0); // Clamped at end
+
+    // SmoothStep interpolation
+    track.interpolation = Interpolation::SmoothStep;
+    assert_eq!(track.eval(0), 0.0);
+    assert_eq!(track.eval(5), 50.0); // Symmetric midpoint
+    assert_eq!(track.eval(10), 100.0);
+
+    // 2. LFO Modulator
+    let lfo_sine = LfoModulator::new(LfoWaveform::Sine, 0.1, 10.0, 50.0);
+    let val_0 = lfo_sine.eval(0);
+    assert!((val_0 - 50.0).abs() < 1e-4);
+
+    let lfo_sq = LfoModulator::new(LfoWaveform::Square, 0.1, 5.0, 10.0);
+    assert_eq!(lfo_sq.eval(0), 15.0);
+    assert_eq!(lfo_sq.eval(6), 5.0);
+
+    // 3. AnimationSequence
+    let mut seq = AnimationSequence::new();
+    let frame1 = ImageBuffer::new(4, 4).expect("buf");
+    let frame2 = ImageBuffer::new(4, 4).expect("buf");
+    seq.add_frame(frame1, 100);
+    seq.add_frame(frame2, 200);
+
+    assert_eq!(seq.len(), 2);
+    assert_eq!(seq.total_duration_ms(), 300);
+    assert_eq!(seq.frame_index_at_time(50, true), 0);
+    assert_eq!(seq.frame_index_at_time(150, true), 1);
+    assert_eq!(seq.frame_index_at_time(350, true), 0); // Looping wraps around
+
+    // Parallel processing across frames
+    let processed = seq
+        .process_frames(|buf, idx| {
+            let mut out = buf.clone();
+            out.set_pixel(0, 0, RgbColor::new((idx * 50) as u8, 0, 0));
+            Ok(out)
+        })
+        .expect("process frames");
+
+    assert_eq!(processed.len(), 2);
+    assert_eq!(processed.frames[0].buffer.get_pixel(0, 0), Some(RgbColor::new(0, 0, 0)));
+    assert_eq!(processed.frames[1].buffer.get_pixel(0, 0), Some(RgbColor::new(50, 0, 0)));
+}
+
+#[test]
+fn test_all_9_temporal_noise_patterns() {
+    let mut buf = ImageBuffer::new(16, 16).expect("buf");
+    for y in 0..16 {
+        for x in 0..16 {
+            buf.set_pixel(x, y, RgbColor::new(128, 128, 128));
+        }
+    }
+
+    for pat in dither_core::temporal::TemporalNoisePattern::ALL {
+        let applied = pat.apply(&buf, 5, 0.5).expect("apply pattern");
+        assert_eq!(applied.width, 16);
+        assert_eq!(applied.height, 16);
+        assert_eq!(applied.data.len(), 16 * 16 * 3);
+        assert!(!pat.name().is_empty());
+    }
+}

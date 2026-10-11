@@ -28,5 +28,5 @@ pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore
 pub use error::DitherError;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykHalftone, PopTone};
-pub use temporal::TemporalNoisePattern;
+pub use temporal::{AnimatedFrame, AnimationSequence, Interpolation, Keyframe, LfoModulator, LfoWaveform, TemporalNoisePattern, TimelineTrack};
 pub use vector::BlackVectorIsolation;

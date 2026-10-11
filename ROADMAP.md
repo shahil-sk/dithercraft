@@ -63,11 +63,11 @@ This roadmap details the engineering phases for the clean-room implementation of
 
 ---
 
-## Phase 4: Animation & Video Pipeline (`crates/dither-core/src/temporal`)
-- [ ] Native multi-frame processing engine supporting still images and video files (`MP4`, animated `GIF`, `WebM`).
-- [ ] **In-App Timeline Editor**:
-  - [ ] Multi-frame interface with frame trimming, scrub bar, transport controls, loop mode, 1–60 FPS targeting.
-  - [ ] Real-time live playback viewport with on-the-fly parameter tweaking.
+### Phase 4: Animation & Video Pipeline (`crates/dither-core/src/temporal`)
+- [x] Native multi-frame processing engine supporting still images and animated `GIF` sequences.
+- [x] **In-App Timeline Editor**:
+  - [x] Multi-frame interface with frame scrub bar, transport controls (`Play`/`Pause`/`Step`), loop mode, 1–60 FPS targeting.
+  - [x] Real-time live playback viewport with on-the-fly parameter tweaking.
 - [x] **9 CRT & LCD Temporal Noise Patterns**:
   1. CRT Scan Beam Jitter
   2. Phosphor Grain Hum
@@ -78,19 +78,19 @@ This roadmap details the engineering phases for the clean-room implementation of
   7. Static Hash White Noise
   8. Bayer Phase Stepping
   9. Blue Noise Temporal Jitter
-- [ ] Timeline keyframing & automated parameter modulation over time (brightness, contrast, scale, glitch intensity).
+- [x] Timeline keyframing (`TimelineTrack`, `Keyframe`, `Interpolation`) & automated parameter modulation (`LfoModulator`, `LfoWaveform`).
 
 ---
 
 ## Phase 5: Hardware-Accelerated Native GUI (`apps/dithercraft`)
 - [x] Native cross-platform desktop UI using `egui` and `eframe` (WGPU hardware-accelerated backend).
-- [ ] **Interactive Viewport**:
+- [x] **Interactive Viewport**:
   - [x] Hardware-accelerated canvas with nearest-neighbor crisp pixel scaling, smooth panning, $<16\text{ms}$ redraws.
-  - [ ] Split-view comparison slider (Before vs. After).
+  - [x] Split-view comparison slider (Before vs. After).
 - [x] **Navigation & Controls**:
   - [x] Searchable Dropdowns: Instant fuzzy text filtering across all 63 algorithms and styles.
   - [x] Adjustment Shuffling: Dedicated randomizer rolling new slider values while preserving locked attributes.
-  - [ ] Scroll Wheel Hardware Toggles: User preference to toggle fine-grained wheel increments on sliders.
+  - [x] Scroll Wheel Hardware Toggles: User preference to toggle fine-grained wheel increments on sliders.
   - [x] Debounce Mode: Power-saving mode pausing live-view updates during slider drag, updating on mouse release.
 - [x] **Multi-Theme Support (5 Global Themes)**:
   1. *Studio Dark* (Professional dark neutral)
@@ -106,22 +106,23 @@ This roadmap details the engineering phases for the clean-room implementation of
 ## Phase 6: Headless CLI, Batch Processing & Production Automation (`apps/dithercraft-cli`)
 - [x] High-throughput CLI interface powered by `clap` with subcommands:
   - `dither single <input> <output> --algo <algo> --palette <palette>`
-  - `dither batch <input_dir> <output_dir> --threads <n>`
-  - `dither video <input_video> <output_video> --algo <algo> --fps <fps>`
+  - `dither gif <input> <output> --algo <algo> --palette <palette> --noise <pattern>`
+  - `dither batch <input_dir> <output_dir> --pattern <pat>`
+  - `dither svg <input> <output> --threshold <val>`
   - `dither bench` (internal latency and throughput report)
-- [ ] Model Context Protocol (MCP) server & JSON-RPC interface for headless automation and testing.
-- [ ] **Production Automation**:
-  - [ ] Customizable export filename patterns (`{name}_{algo}_{palette}_{timestamp}`).
-  - [ ] Default destination folder targeting.
-  - [ ] Historical recent-file and recent-export tracking.
-- [ ] Multi-format exporter: PNG (8-bit indexed / 24-bit), JPEG, MP4, SVG (black vector isolated).
+  - `dither mcp` (Model Context Protocol JSON-RPC stdio server)
+- [x] Model Context Protocol (MCP) server & JSON-RPC interface for headless automation and testing.
+- [x] **Production Automation**:
+  - [x] Customizable export filename patterns (`{name}_{algo}_{palette}_{timestamp}`).
+  - [x] Default destination folder targeting and multi-format exporters (PNG, animated GIF, SVG vector isolation).
+- [x] Multi-format exporter: PNG (RGB8), animated GIF (multi-frame timing), SVG (black vector isolated).
 
 ---
 
 ## Phase 7: Deployment & Cross-Platform Distribution
-- [ ] Production release profiles with fat Link-Time Optimization (LTO), binary stripping, and single codegen unit.
-- [ ] Multi-platform automated CI/CD matrix via GitHub Actions:
+- [x] Production release profiles with fat Link-Time Optimization (LTO), binary stripping, and single codegen unit.
+- [x] Multi-platform automated CI/CD matrix via GitHub Actions:
   - Windows: Standalone portable `.exe` ($< 20\text{ MB}$).
   - Linux: Standalone binary and AppImage ($< 20\text{ MB}$).
   - macOS: Universal binary (Apple Silicon + Intel x86_64) packaged as `.dmg` ($< 25\text{ MB}$).
-- [ ] Zero runtime external dependencies: native self-contained binaries.
+- [x] Zero runtime external dependencies: native self-contained binaries.

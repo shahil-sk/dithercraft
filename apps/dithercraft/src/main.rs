@@ -10,6 +10,8 @@ use dither_core::{
     vector::BlackVectorIsolation,
 };
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
+use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
+use image::{AnimationDecoder, Frame, RgbaImage};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
@@ -138,6 +140,9 @@ pub struct DitherCraftApp {
     timeline_frame: u32,
     timeline_max_frames: u32,
     last_frame_instant: Instant,
+    source_frames: Vec<Arc<ImageBuffer>>,
+    frame_delays: Vec<u32>,
+    fine_wheel_increment: bool,
 
     // Threading channels
     tx: Sender<RenderJobResult>,
@@ -160,8 +165,13 @@ impl DitherCraftApp {
             }
         }
 
+        let default_arc = Arc::new(default_img);
+
         Self {
-            source_image: Some(Arc::new(default_img)),
+            source_image: Some(default_arc.clone()),
+            source_frames: vec![default_arc],
+            frame_delays: vec![100],
+            fine_wheel_increment: false,
             rendered_image: None,
             texture: None,
             selected_algo: "Floyd-Steinberg".into(),
@@ -218,6 +228,16 @@ impl DitherCraftApp {
             rx,
             is_rendering: false,
         }
+    }
+
+    fn set_current_frame(&mut self, frame: u32) {
+        self.timeline_frame = frame;
+        self.frame_counter = frame;
+        if !self.source_frames.is_empty() {
+            let idx = (frame as usize).min(self.source_frames.len() - 1);
+            self.source_image = Some(self.source_frames[idx].clone());
+        }
+        self.trigger_render();
     }
 
     fn trigger_render(&mut self) {
@@ -362,17 +382,57 @@ impl eframe::App for DitherCraftApp {
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open Image...").clicked() {
-                        let path = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file();
-                        if let Some(path) = path
-                            && let Ok(reader) = image::ImageReader::open(&path)
-                            && let Ok(dyn_img) = reader.decode()
-                        {
-                            let rgb = dyn_img.to_rgb8();
-                            let (w, h) = rgb.dimensions();
-                            if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
-                                self.source_image = Some(Arc::new(buf));
-                                self.trigger_render();
+                    if ui.button("Open Image or GIF...").clicked() {
+                        let path = rfd::FileDialog::new().add_filter("Image / GIF", &["png", "jpg", "jpeg", "webp", "bmp", "gif"]).pick_file();
+                        if let Some(path) = path {
+                            let is_gif = path.extension().and_then(|e| e.to_str()).map(|s| s.eq_ignore_ascii_case("gif")).unwrap_or(false);
+                            if is_gif
+                                && let Ok(file) = std::fs::File::open(&path)
+                                && let Ok(decoder) = GifDecoder::new(std::io::BufReader::new(file))
+                                && let Ok(raw_frames) = decoder.into_frames().collect_frames()
+                                && !raw_frames.is_empty()
+                            {
+                                let mut frames = Vec::new();
+                                let mut delays = Vec::new();
+                                for frame in raw_frames {
+                                    let (w, h) = (frame.buffer().width(), frame.buffer().height());
+                                    let (num, denom) = frame.delay().numer_denom_ms();
+                                    let delay_ms = num.checked_div(denom).map(|d| d.max(10)).unwrap_or(100);
+                                    let mut rgb_data = Vec::with_capacity((w * h * 3) as usize);
+                                    for px in frame.buffer().pixels() {
+                                        rgb_data.push(px[0]);
+                                        rgb_data.push(px[1]);
+                                        rgb_data.push(px[2]);
+                                    }
+                                    if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb_data) {
+                                        frames.push(Arc::new(buf));
+                                        delays.push(delay_ms);
+                                    }
+                                }
+                                if !frames.is_empty() {
+                                    self.timeline_max_frames = frames.len() as u32;
+                                    self.timeline_frame = 0;
+                                    self.source_image = Some(frames[0].clone());
+                                    self.source_frames = frames;
+                                    self.frame_delays = delays;
+                                    self.status_text = format!("Loaded animated GIF ({} frames)", self.source_frames.len());
+                                    self.trigger_render();
+                                }
+                            } else if let Ok(reader) = image::ImageReader::open(&path)
+                                && let Ok(dyn_img) = reader.decode()
+                            {
+                                let rgb = dyn_img.to_rgb8();
+                                let (w, h) = rgb.dimensions();
+                                if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                                    let arc_buf = Arc::new(buf);
+                                    self.source_image = Some(arc_buf.clone());
+                                    self.source_frames = vec![arc_buf];
+                                    self.frame_delays = vec![100];
+                                    self.timeline_max_frames = 60;
+                                    self.timeline_frame = 0;
+                                    self.status_text = format!("Loaded static image ({w}x{h})");
+                                    self.trigger_render();
+                                }
                             }
                         }
                         ui.close_menu();
@@ -383,6 +443,112 @@ impl eframe::App for DitherCraftApp {
                             && let Some(path) = rfd::FileDialog::new().add_filter("PNG Image", &["png"]).save_file()
                         {
                             let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Export Animated GIF...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("GIF Animation", &["gif"]).save_file() {
+                            let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
+                            let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
+                                self.source_frames.clone()
+                            } else if let Some(ref src) = self.source_image {
+                                vec![src.clone(); num_frames]
+                            } else {
+                                Vec::new()
+                            };
+
+                            if !frames_to_render.is_empty()
+                                && let Ok(out_file) = std::fs::File::create(&path)
+                            {
+                                let mut encoder = GifEncoder::new(std::io::BufWriter::new(out_file));
+                                let _ = encoder.set_repeat(Repeat::Infinite);
+
+                                let delays = self.frame_delays.clone();
+                                let default_delay_ms = 1000 / self.target_fps.max(1);
+
+                                let algo_name = self.selected_algo.clone();
+                                let palette = self.active_palette.clone();
+                                let temporal_noise =
+                                    if self.temporal_noise_enabled { Some((self.temporal_pattern, self.temporal_intensity)) } else { None };
+                                let glow_opt = if self.glow_enabled {
+                                    Some(EpsilonGlow { threshold: self.glow_threshold, radius: self.glow_radius, intensity: self.glow_intensity })
+                                } else {
+                                    None
+                                };
+                                let crt_opt = if self.crt_enabled {
+                                    Some(VintageCrtSimulation {
+                                        scanline_intensity: self.crt_scanline,
+                                        barrel_curvature: self.crt_barrel,
+                                        vignette_intensity: self.crt_vignette,
+                                    })
+                                } else {
+                                    None
+                                };
+                                let blur_opt = if self.blur_enabled { Some(GaussianBlur::new(self.blur_sigma)) } else { None };
+                                let sharpen_opt = if self.sharpen_enabled { Some(Sharpen::new(self.sharpen_amount, 1.0)) } else { None };
+                                let chromatic_opt = if self.chromatic_enabled {
+                                    Some(ChromaticAberration { shift_x: self.chromatic_shift, shift_y: 0, radial: self.chromatic_radial })
+                                } else {
+                                    None
+                                };
+                                let glitch_opt = if self.glitch_enabled {
+                                    Some(JpegGlitchCore { mode: self.glitch_mode, intensity: self.glitch_intensity, block_size: 8, seed: 42 })
+                                } else {
+                                    None
+                                };
+
+                                use rayon::prelude::*;
+                                let rendered: Vec<_> = frames_to_render
+                                    .par_iter()
+                                    .enumerate()
+                                    .map(|(frame_idx, src_buf)| {
+                                        let mut current = (**src_buf).clone();
+                                        if let Some((pattern, intensity)) = temporal_noise {
+                                            current = pattern.apply(&current, frame_idx as u32, intensity).unwrap_or(current);
+                                        }
+                                        let algo = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
+                                        let mut out = algo.apply(&current, &palette).unwrap_or(current);
+                                        if let Some(glow) = &glow_opt {
+                                            out = glow.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(chroma) = &chromatic_opt {
+                                            out = chroma.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(blur) = &blur_opt {
+                                            out = blur.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(sharp) = &sharpen_opt {
+                                            out = sharp.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(crt) = &crt_opt {
+                                            out = crt.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(glitch) = &glitch_opt {
+                                            out = glitch.apply(&out).unwrap_or(out);
+                                        }
+
+                                        let delay_ms = delays.get(frame_idx).copied().unwrap_or(default_delay_ms);
+                                        (out, delay_ms)
+                                    })
+                                    .collect();
+
+                                for (buf, delay_ms) in rendered {
+                                    let mut rgba_raw = Vec::with_capacity((buf.width * buf.height * 4) as usize);
+                                    for chunk in buf.data.chunks_exact(3) {
+                                        rgba_raw.push(chunk[0]);
+                                        rgba_raw.push(chunk[1]);
+                                        rgba_raw.push(chunk[2]);
+                                        rgba_raw.push(255);
+                                    }
+                                    if let Some(rgba_img) = RgbaImage::from_raw(buf.width, buf.height, rgba_raw) {
+                                        let delay = image::Delay::from_saturating_duration(std::time::Duration::from_millis(delay_ms as u64));
+                                        let frame = Frame::from_parts(rgba_img, 0, 0, delay);
+                                        let _ = encoder.encode_frame(frame);
+                                    }
+                                }
+                                self.status_text = format!("Exported animated GIF ({num_frames} frames)");
+                            }
                         }
                         ui.close_menu();
                     }
@@ -697,8 +863,9 @@ impl eframe::App for DitherCraftApp {
                 }
             });
 
-            // Debounce setting
+            // Debounce and wheel settings
             ui.checkbox(&mut self.debounce_mode, "Debounce Rendering");
+            ui.checkbox(&mut self.fine_wheel_increment, "Fine Wheel Increment");
 
             if changed {
                 self.trigger_render();
@@ -745,24 +912,24 @@ impl eframe::App for DitherCraftApp {
                 }
 
                 if ui.button("⏮").clicked() {
-                    self.timeline_frame = self.timeline_frame.saturating_sub(1);
-                    self.frame_counter = self.timeline_frame;
-                    self.trigger_render();
+                    let prev = self.timeline_frame.saturating_sub(1);
+                    self.set_current_frame(prev);
                 }
 
                 if ui.button("⏭").clicked() {
-                    if self.timeline_frame + 1 < self.timeline_max_frames {
-                        self.timeline_frame += 1;
+                    let next = if self.timeline_frame + 1 < self.timeline_max_frames {
+                        self.timeline_frame + 1
                     } else if self.loop_mode {
-                        self.timeline_frame = 0;
-                    }
-                    self.frame_counter = self.timeline_frame;
-                    self.trigger_render();
+                        0
+                    } else {
+                        self.timeline_frame
+                    };
+                    self.set_current_frame(next);
                 }
 
-                if ui.add(egui::Slider::new(&mut self.timeline_frame, 0..=self.timeline_max_frames).text("Frame")).changed() {
-                    self.frame_counter = self.timeline_frame;
-                    self.trigger_render();
+                let max_slider = self.timeline_max_frames.saturating_sub(1);
+                if ui.add(egui::Slider::new(&mut self.timeline_frame, 0..=max_slider).text("Frame")).changed() {
+                    self.set_current_frame(self.timeline_frame);
                 }
 
                 ui.add(egui::Slider::new(&mut self.target_fps, 1..=60).text("FPS"));
@@ -792,15 +959,15 @@ impl eframe::App for DitherCraftApp {
             let frame_duration = 1.0 / (self.target_fps as f64).max(1.0);
             if now.duration_since(self.last_frame_instant).as_secs_f64() >= frame_duration {
                 self.last_frame_instant = now;
-                if self.timeline_frame + 1 < self.timeline_max_frames {
-                    self.timeline_frame += 1;
+                let next = if self.timeline_frame + 1 < self.timeline_max_frames {
+                    self.timeline_frame + 1
                 } else if self.loop_mode {
-                    self.timeline_frame = 0;
+                    0
                 } else {
                     self.is_playing = false;
-                }
-                self.frame_counter = self.timeline_frame;
-                self.trigger_render();
+                    self.timeline_frame
+                };
+                self.set_current_frame(next);
             }
             ctx.request_repaint();
         } else if self.temporal_noise_enabled {
