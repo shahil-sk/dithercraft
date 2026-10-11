@@ -144,6 +144,10 @@ pub struct DitherCraftApp {
     frame_delays: Vec<u32>,
     fine_wheel_increment: bool,
 
+    // App Brand Logo & About Dialog
+    logo_texture: Option<TextureHandle>,
+    show_about: bool,
+
     // Threading channels
     tx: Sender<RenderJobResult>,
     rx: Receiver<RenderJobResult>,
@@ -151,8 +155,17 @@ pub struct DitherCraftApp {
 }
 
 impl DitherCraftApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = channel();
+
+        let logo_texture =
+            image::load_from_memory(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/io.github.dithercraft.png")).ok().map(|img| {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let pixels = rgba.into_raw();
+                let color_image = ColorImage::from_rgba_unmultiplied(size, &pixels);
+                cc.egui_ctx.load_texture("app_logo", color_image, TextureOptions::LINEAR)
+            });
 
         // Default initial image: 256x256 test radial gradient
         let mut default_img = ImageBuffer::new(256, 256).unwrap_or_else(|_| ImageBuffer { width: 1, height: 1, data: vec![0, 0, 0] });
@@ -223,6 +236,9 @@ impl DitherCraftApp {
             timeline_frame: 0,
             timeline_max_frames: 60,
             last_frame_instant: Instant::now(),
+
+            logo_texture,
+            show_about: false,
 
             tx,
             rx,
@@ -617,12 +633,42 @@ impl eframe::App for DitherCraftApp {
                         }
                     }
                 });
+
+                ui.menu_button("Help", |ui| {
+                    if ui.button("About DitherCraft...").clicked() {
+                        self.show_about = true;
+                        ui.close_menu();
+                    }
+                });
             });
         });
 
+        // About Dialog Modal
+        if self.show_about {
+            egui::Window::new("About DitherCraft").collapsible(false).resizable(false).open(&mut self.show_about).show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    if let Some(ref logo) = self.logo_texture {
+                        ui.image((logo.id(), egui::vec2(96.0, 96.0)));
+                    }
+                    ui.add_space(4.0);
+                    ui.heading("DitherCraft");
+                    ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+                    ui.label("Studio-Grade Retro Graphics Workstation in Pure Rust");
+                    ui.add_space(8.0);
+                    ui.label("Clean-room implementation with zero proprietary assets.");
+                    ui.label("Dual-licensed under MIT / Apache-2.0.");
+                });
+            });
+        }
+
         // Left Control Panel
         egui::SidePanel::left("control_panel").min_width(280.0).show(ctx, |ui| {
-            ui.heading("DitherCraft Studio");
+            ui.horizontal(|ui| {
+                if let Some(ref logo) = self.logo_texture {
+                    ui.image((logo.id(), egui::vec2(24.0, 24.0)));
+                }
+                ui.heading("DitherCraft Studio");
+            });
             ui.separator();
 
             let mut changed = false;
@@ -979,10 +1025,14 @@ impl eframe::App for DitherCraftApp {
 }
 
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("DitherCraft — Retro Graphics Workstation"),
-        ..Default::default()
-    };
+    let mut viewport = egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("DitherCraft — Retro Graphics Workstation");
+
+    const ICON_BYTES: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/io.github.dithercraft.png");
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(ICON_BYTES) {
+        viewport = viewport.with_icon(Arc::new(icon));
+    }
+
+    let native_options = eframe::NativeOptions { viewport, ..Default::default() };
 
     eframe::run_native("DitherCraft", native_options, Box::new(|cc| Ok(Box::new(DitherCraftApp::new(cc)))))
 }

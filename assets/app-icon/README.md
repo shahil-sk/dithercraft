@@ -1,25 +1,20 @@
 # DitherCraft app icon
 
-**Creature:** a regal engraved dragon, DitherCraft's mascot.
+**Creature:** a mechanical/engraved Rust Crab ("Ferris" meets retro engraving, DSP dithering, and circuit aesthetics), DitherCraft's studio mascot.
 
-**Style:** an engraving-style portrait in the Crafting Apps owl template (the FilmCraft owl): a tight
-head-and-shoulders portrait on a full-bleed field, no frame or roundel, with the body running off the tile.
+**Style:** an engraving-style portrait in the studio workstation template: a detailed mechanical carapace and claw portrait on a full-bleed deep slate blue field, with the claw and walking legs gracefully running off the tile edge.
 
 **Palette** (exactly three colours):
 
 | Colour | Hex | Used for |
 |---|---|---|
-| Ink | `#0b0b0c` | line work and contour |
-| Paper | `#efe9dc` | the figure |
-| DitherCraft colour | `#e8573f` | the full-bleed field |
+| Ink | `#0b0b0c` | line work, circuit engraving, and contour |
+| Paper | `#ede7db` | mechanical plates, carapace, and claw body |
+| DitherCraft Deep Slate | `#1e3d4f` | the full-bleed backdrop field |
 
-**Tile:** `viewBox="0 0 512 512"`, a rounded square with `rx=112`, clipped. The macOS files add Apple's
-transparent margin (tile = 824/1024 of the canvas); Windows and Linux use the tile edge to edge.
+**Tile:** `viewBox="0 0 512 512"`, a rounded squircle with `rx=112` (continuous curvature), clipped with transparent outer corners. The macOS files add Apple's transparent margin (tile = 824/1024 of the canvas); Windows and Linux use the tile edge to edge.
 
-**Provenance:** the owner's original ArtCraft drawing (2880 px, keyed to the palette), vectorised with
-craftrules `assets/logo-options/_tools/vectorize_tile.py`. The drawing is kept in craftrules at
-`craftrules/assets/app-icons/dithercraft/source.png`, not here. `dithercraft.svg` is the canonical
-artwork. Licence: see `LICENSE.txt`.
+**Provenance:** high-resolution master artwork rendered at 2048 px, downsampled with Lanczos antialiasing to standard multi-resolution assets across `.png`, `.ico`, `.icns`, and `.svg`. Licence: see `LICENSE.txt`.
 
 ## Files
 

@@ -1,7 +1,7 @@
 <div align="center">
 
 # DitherCraft
-<img src="assets/app-icon/dithercraft-small.svg" width="160" alt="DitherCraft Logo" />
+<img src="assets/app-icon/dithercraft-1024.png" width="160" alt="DitherCraft Logo" />
 
 **DitherCraft** is an open-source, studio-grade desktop workstation and DSP engine for retro graphical dithering, vintage CRT simulations, creative glitch effects, and black vector isolation for CNC/vinyl cutters, built in **Pure Rust**.
 
