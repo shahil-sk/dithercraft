@@ -20,4 +20,5 @@ opencode.jsonc
 .claude/
 .gemini/
 .qoder/
+.codebuddy/
 .mcp.json
