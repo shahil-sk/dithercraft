@@ -1,6 +1,17 @@
+use crate::buffer::ImageBuffer;
 use crate::color::RgbColor;
 use crate::error::DitherError;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+/// Supported color distance evaluation metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ColorMetric {
+    #[default]
+    Redmean,
+    EuclideanRgb,
+    CieLab,
+}
 
 /// Color swatch entry with lock state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +31,8 @@ impl Swatch {
 pub struct Palette {
     pub name: String,
     pub swatches: Vec<Swatch>,
+    #[serde(default)]
+    pub metric: ColorMetric,
 }
 
 impl Palette {
@@ -28,7 +41,7 @@ impl Palette {
             return Err(DitherError::EmptyPalette);
         }
         let swatches = colors.into_iter().map(|c| Swatch::new(c, false)).collect();
-        Ok(Self { name: name.into(), swatches })
+        Ok(Self { name: name.into(), swatches, metric: ColorMetric::default() })
     }
 
     #[inline]
@@ -55,34 +68,99 @@ impl Palette {
         }
     }
 
-    /// Find the nearest palette color using Redmean perceptual color distance.
+    /// Find the nearest palette color using the active color distance metric.
     pub fn find_nearest(&self, target: &RgbColor) -> RgbColor {
-        let mut best_color = self.swatches[0].color;
-        let mut min_dist = u32::MAX;
+        self.find_nearest_with_metric(target, self.metric)
+    }
 
-        for swatch in &self.swatches {
-            let dist = target.distance_redmean(&swatch.color);
-            if dist < min_dist {
-                min_dist = dist;
-                best_color = swatch.color;
+    /// Find the nearest palette color using the specified color metric.
+    pub fn find_nearest_with_metric(&self, target: &RgbColor, metric: ColorMetric) -> RgbColor {
+        if self.swatches.is_empty() {
+            return *target;
+        }
+        let mut best_color = self.swatches[0].color;
+
+        match metric {
+            ColorMetric::Redmean => {
+                let mut min_dist = u32::MAX;
+                for swatch in &self.swatches {
+                    let dist = target.distance_redmean(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_color = swatch.color;
+                    }
+                }
+            }
+            ColorMetric::EuclideanRgb => {
+                let mut min_dist = u32::MAX;
+                for swatch in &self.swatches {
+                    let dist = target.distance_sq(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_color = swatch.color;
+                    }
+                }
+            }
+            ColorMetric::CieLab => {
+                let mut min_dist = f32::MAX;
+                for swatch in &self.swatches {
+                    let dist = target.distance_cielab_de(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_color = swatch.color;
+                    }
+                }
             }
         }
+
         best_color
     }
 
-    /// Find the nearest swatch index.
+    /// Find the nearest swatch index using the active color metric.
     pub fn find_nearest_index(&self, target: &RgbColor) -> usize {
+        if self.swatches.is_empty() {
+            return 0;
+        }
         let mut best_idx = 0;
-        let mut min_dist = u32::MAX;
 
-        for (idx, swatch) in self.swatches.iter().enumerate() {
-            let dist = target.distance_redmean(&swatch.color);
-            if dist < min_dist {
-                min_dist = dist;
-                best_idx = idx;
+        match self.metric {
+            ColorMetric::Redmean => {
+                let mut min_dist = u32::MAX;
+                for (idx, swatch) in self.swatches.iter().enumerate() {
+                    let dist = target.distance_redmean(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_idx = idx;
+                    }
+                }
+            }
+            ColorMetric::EuclideanRgb => {
+                let mut min_dist = u32::MAX;
+                for (idx, swatch) in self.swatches.iter().enumerate() {
+                    let dist = target.distance_sq(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_idx = idx;
+                    }
+                }
+            }
+            ColorMetric::CieLab => {
+                let mut min_dist = f32::MAX;
+                for (idx, swatch) in self.swatches.iter().enumerate() {
+                    let dist = target.distance_cielab_de(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_idx = idx;
+                    }
+                }
             }
         }
         best_idx
+    }
+
+    /// Construct a fast spatial 3D KD-Tree for O(log K) nearest neighbor color queries.
+    pub fn to_kd_tree(&self) -> PaletteKdTree {
+        PaletteKdTree::build(self)
     }
 
     /// Tonal sorting: Sort swatches strictly by luminance (ascending or descending).
@@ -127,11 +205,328 @@ impl Palette {
         }
     }
 
-    // --- Bundled Presets ---
+    // --- Multi-Format Parsers ---
+
+    /// Parse palette from JSON string (either `Palette` JSON or string array of hex codes).
+    pub fn parse_json(content: &str) -> Result<Self, DitherError> {
+        if let Ok(pal) = serde_json::from_str::<Palette>(content)
+            && !pal.is_empty()
+        {
+            return Ok(pal);
+        }
+
+        #[derive(Deserialize)]
+        struct HexArrayPalette {
+            name: Option<String>,
+            colors: Option<Vec<String>>,
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<HexArrayPalette>(content)
+            && let Some(colors) = parsed.colors
+        {
+            let rgb_colors: Vec<RgbColor> = colors.iter().filter_map(|h| RgbColor::from_hex(h)).collect();
+            if !rgb_colors.is_empty() {
+                return Self::new(parsed.name.unwrap_or_else(|| "Imported JSON".into()), rgb_colors);
+            }
+        }
+
+        if let Ok(hex_list) = serde_json::from_str::<Vec<String>>(content) {
+            let rgb_colors: Vec<RgbColor> = hex_list.iter().filter_map(|h| RgbColor::from_hex(h)).collect();
+            if !rgb_colors.is_empty() {
+                return Self::new("Imported JSON", rgb_colors);
+            }
+        }
+
+        Err(DitherError::PresetLoadFailed("Invalid JSON palette format".into()))
+    }
+
+    /// Parse palette from plain hex codes file (one hex string per line).
+    pub fn parse_hex(name: &str, content: &str) -> Result<Self, DitherError> {
+        let mut colors = Vec::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with(';') {
+                continue;
+            }
+            if let Some(col) = RgbColor::from_hex(trimmed) {
+                colors.push(col);
+            }
+        }
+        if colors.is_empty() {
+            return Err(DitherError::PresetLoadFailed("No valid hex colors found in file".into()));
+        }
+        Self::new(name, colors)
+    }
+
+    /// Parse GIMP Palette (.gpl) standard file format.
+    pub fn parse_gpl(content: &str) -> Result<Self, DitherError> {
+        let mut name = "GIMP Palette".to_string();
+        let mut colors = Vec::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("GIMP Palette") {
+                continue;
+            }
+            if let Some(name_str) = trimmed.strip_prefix("Name:") {
+                name = name_str.trim().to_string();
+                continue;
+            }
+            if trimmed.starts_with('#') || trimmed.starts_with("Columns:") {
+                continue;
+            }
+
+            // Line format: R G B [Name]
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 3
+                && let (Ok(r), Ok(g), Ok(b)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>(), parts[2].parse::<u8>())
+            {
+                colors.push(RgbColor::new(r, g, b));
+            }
+        }
+
+        if colors.is_empty() {
+            return Err(DitherError::PresetLoadFailed("No colors found in GPL file".into()));
+        }
+        Self::new(name, colors)
+    }
+
+    /// Parse JASC-PAL (.pal) palette file format.
+    pub fn parse_pal(content: &str) -> Result<Self, DitherError> {
+        let mut lines = content.lines().map(str::trim).filter(|l| !l.is_empty());
+        let header = lines.next().ok_or_else(|| DitherError::PresetLoadFailed("Empty PAL file".into()))?;
+
+        if !header.eq_ignore_ascii_case("JASC-PAL") {
+            // Try fallback: plain RGB triplets
+            let mut colors = Vec::new();
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3
+                    && let (Ok(r), Ok(g), Ok(b)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>(), parts[2].parse::<u8>())
+                {
+                    colors.push(RgbColor::new(r, g, b));
+                }
+            }
+            if colors.is_empty() {
+                return Err(DitherError::PresetLoadFailed("Invalid PAL format".into()));
+            }
+            return Self::new("Imported PAL", colors);
+        }
+
+        let _version = lines.next(); // 0100
+        let count_str = lines.next().ok_or_else(|| DitherError::PresetLoadFailed("Missing count in JASC-PAL".into()))?;
+        let _expected_count: usize = count_str.parse().unwrap_or(0);
+
+        let mut colors = Vec::new();
+        for line in lines {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3
+                && let (Ok(r), Ok(g), Ok(b)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>(), parts[2].parse::<u8>())
+            {
+                colors.push(RgbColor::new(r, g, b));
+            }
+        }
+
+        if colors.is_empty() {
+            return Err(DitherError::PresetLoadFailed("No valid colors in JASC-PAL".into()));
+        }
+        Self::new("JASC-PAL", colors)
+    }
+
+    /// Import palette from a file path auto-detecting format by extension or content (.json, .hex, .gpl, .pal).
+    pub fn import_from_file(path: &Path) -> Result<Self, DitherError> {
+        let content = std::fs::read_to_string(path).map_err(|e| DitherError::PresetLoadFailed(e.to_string()))?;
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Imported Palette");
+        match ext.as_str() {
+            "json" => Self::parse_json(&content),
+            "hex" => Self::parse_hex(name, &content),
+            "gpl" => Self::parse_gpl(&content),
+            "pal" => Self::parse_pal(&content),
+            _ => Self::parse_json(&content)
+                .or_else(|_| Self::parse_gpl(&content))
+                .or_else(|_| Self::parse_pal(&content))
+                .or_else(|_| Self::parse_hex(name, &content)),
+        }
+    }
+
+    // --- Color Extraction Engine ---
+
+    /// Median Cut color quantization (Paul Heckbert 1982, ACM SIGGRAPH).
+    /// Extracts `num_colors` representative palette tones from an image.
+    pub fn from_image_median_cut(name: impl Into<String>, image: &ImageBuffer, num_colors: usize) -> Result<Self, DitherError> {
+        if image.width == 0 || image.height == 0 {
+            return Err(DitherError::ZeroDimension);
+        }
+        let target_k = num_colors.clamp(2, 256);
+
+        // Subsample pixels for speed (up to 16,384 samples)
+        let total_pixels = image.pixel_count();
+        let step = (total_pixels / 16384).max(1);
+        let mut pixels = Vec::with_capacity(total_pixels / step + 1);
+
+        for chunk in image.data.chunks_exact(3).step_by(step) {
+            pixels.push(RgbColor::new(chunk[0], chunk[1], chunk[2]));
+        }
+
+        if pixels.is_empty() {
+            return Err(DitherError::ZeroDimension);
+        }
+
+        // Bounding boxes in RGB space
+        let mut boxes: Vec<Vec<RgbColor>> = vec![pixels];
+
+        while boxes.len() < target_k {
+            // Pick the box with the greatest channel range
+            let mut best_box_idx = 0;
+            let mut max_range = 0i32;
+            let mut best_axis = 0usize; // 0=R, 1=G, 2=B
+
+            for (idx, b) in boxes.iter().enumerate() {
+                if b.len() < 2 {
+                    continue;
+                }
+                let (mut min_r, mut max_r) = (255u8, 0u8);
+                let (mut min_g, mut max_g) = (255u8, 0u8);
+                let (mut min_b, mut max_b) = (255u8, 0u8);
+                for c in b {
+                    min_r = min_r.min(c.r);
+                    max_r = max_r.max(c.r);
+                    min_g = min_g.min(c.g);
+                    max_g = max_g.max(c.g);
+                    min_b = min_b.min(c.b);
+                    max_b = max_b.max(c.b);
+                }
+
+                let range_r = (max_r as i32) - (min_r as i32);
+                let range_g = (max_g as i32) - (min_g as i32);
+                let range_b = (max_b as i32) - (min_b as i32);
+                let range = range_r.max(range_g).max(range_b);
+
+                if range > max_range {
+                    max_range = range;
+                    best_box_idx = idx;
+                    best_axis = if range == range_r {
+                        0
+                    } else if range == range_g {
+                        1
+                    } else {
+                        2
+                    };
+                }
+            }
+
+            if max_range <= 0 {
+                break; // Cannot subdivide further
+            }
+
+            let mut target_box = boxes.swap_remove(best_box_idx);
+            match best_axis {
+                0 => target_box.sort_unstable_by_key(|c| c.r),
+                1 => target_box.sort_unstable_by_key(|c| c.g),
+                _ => target_box.sort_unstable_by_key(|c| c.b),
+            }
+
+            let mid = target_box.len() / 2;
+            let right = target_box.split_off(mid);
+            boxes.push(target_box);
+            boxes.push(right);
+        }
+
+        // Average RGB per box
+        let mut result_colors = Vec::with_capacity(boxes.len());
+        for b in boxes {
+            if b.is_empty() {
+                continue;
+            }
+            let (mut sum_r, mut sum_g, mut sum_b) = (0u64, 0u64, 0u64);
+            for c in &b {
+                sum_r += c.r as u64;
+                sum_g += c.g as u64;
+                sum_b += c.b as u64;
+            }
+            let n = b.len() as u64;
+            result_colors.push(RgbColor::new((sum_r / n) as u8, (sum_g / n) as u8, (sum_b / n) as u8));
+        }
+
+        Self::new(name, result_colors)
+    }
+
+    /// K-Means color clustering (Stuart Lloyd 1982).
+    /// Finds `k` optimal centroids iteratively.
+    pub fn from_image_kmeans(name: impl Into<String>, image: &ImageBuffer, k: usize, max_iterations: usize) -> Result<Self, DitherError> {
+        let initial_pal = Self::from_image_median_cut("initial", image, k)?;
+        let mut centroids = initial_pal.colors();
+        let k = centroids.len();
+
+        // Sample pixels
+        let total = image.pixel_count();
+        let step = (total / 8192).max(1);
+        let samples: Vec<RgbColor> = image.data.chunks_exact(3).step_by(step).map(|chunk| RgbColor::new(chunk[0], chunk[1], chunk[2])).collect();
+
+        if samples.is_empty() {
+            return Err(DitherError::ZeroDimension);
+        }
+
+        for _ in 0..max_iterations.clamp(1, 30) {
+            let mut cluster_sums = vec![(0u64, 0u64, 0u64, 0u64); k];
+
+            for px in &samples {
+                let mut best_idx = 0;
+                let mut min_d = u32::MAX;
+                for (ci, cent) in centroids.iter().enumerate() {
+                    let d = px.distance_redmean(cent);
+                    if d < min_d {
+                        min_d = d;
+                        best_idx = ci;
+                    }
+                }
+                cluster_sums[best_idx].0 += px.r as u64;
+                cluster_sums[best_idx].1 += px.g as u64;
+                cluster_sums[best_idx].2 += px.b as u64;
+                cluster_sums[best_idx].3 += 1;
+            }
+
+            let mut changed = false;
+            for (ci, cent) in centroids.iter_mut().enumerate() {
+                let count = cluster_sums[ci].3;
+                if let (Some(r), Some(g), Some(b)) =
+                    (cluster_sums[ci].0.checked_div(count), cluster_sums[ci].1.checked_div(count), cluster_sums[ci].2.checked_div(count))
+                {
+                    let new_col = RgbColor::new(r as u8, g as u8, b as u8);
+                    if *cent != new_col {
+                        *cent = new_col;
+                        changed = true;
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        Self::new(name, centroids)
+    }
+
+    // --- Bundled Retro Presets ---
 
     /// 1-bit Monochrome Black & White
     pub fn monochrome() -> Self {
-        Self { name: "Monochrome 1-bit".into(), swatches: vec![Swatch::new(RgbColor::BLACK, false), Swatch::new(RgbColor::WHITE, false)] }
+        Self {
+            name: "Monochrome 1-bit".into(),
+            swatches: vec![Swatch::new(RgbColor::BLACK, false), Swatch::new(RgbColor::WHITE, false)],
+            metric: ColorMetric::default(),
+        }
+    }
+
+    /// Macintosh 1-bit Monochrome
+    pub fn mac_1bit() -> Self {
+        Self {
+            name: "Macintosh 1-bit".into(),
+            swatches: vec![Swatch::new(RgbColor::BLACK, false), Swatch::new(RgbColor::WHITE, false)],
+            metric: ColorMetric::default(),
+        }
     }
 
     /// Game Boy 4-shade olive green
@@ -144,6 +539,7 @@ impl Palette {
                 Swatch::new(RgbColor::new(139, 172, 15), false),
                 Swatch::new(RgbColor::new(155, 188, 15), false),
             ],
+            metric: ColorMetric::default(),
         }
     }
 
@@ -157,6 +553,7 @@ impl Palette {
                 Swatch::new(RgbColor::new(255, 85, 255), false),
                 Swatch::new(RgbColor::new(255, 255, 255), false),
             ],
+            metric: ColorMetric::default(),
         }
     }
 
@@ -170,6 +567,124 @@ impl Palette {
                 Swatch::new(RgbColor::new(0, 240, 255), false),
                 Swatch::new(RgbColor::new(255, 230, 0), false),
             ],
+            metric: ColorMetric::default(),
+        }
+    }
+
+    /// Apple II (16 colors composite palette)
+    pub fn apple_ii() -> Self {
+        let hexes = [
+            "#000000", "#901740", "#402CA5", "#D043E5", "#006940", "#808080", "#2F95E5", "#BFABFF", "#405400", "#D06A1A", "#8A8A8A", "#FF89E5",
+            "#2FD340", "#BFE880", "#6FEFB5", "#FFFFFF",
+        ];
+        let colors = hexes.into_iter().filter_map(RgbColor::from_hex).collect();
+        Self::new("Apple II", colors).unwrap_or_else(|_| Self::monochrome())
+    }
+
+    /// Commodore 64 (16 authentic Pepto colors)
+    pub fn commodore_64() -> Self {
+        let hexes = [
+            "#000000", "#FFFFFF", "#880000", "#AAFFEE", "#CC44CC", "#00CC55", "#0000AA", "#EEEE77", "#DD8855", "#664400", "#FF7777", "#333333",
+            "#777777", "#AAFF66", "#0088FF", "#BBBBBB",
+        ];
+        let colors = hexes.into_iter().filter_map(RgbColor::from_hex).collect();
+        Self::new("Commodore 64", colors).unwrap_or_else(|_| Self::monochrome())
+    }
+
+    /// Nintendo Entertainment System (NES 16-color iconic subset)
+    pub fn nes() -> Self {
+        let hexes = [
+            "#000000", "#FCFCFC", "#F83800", "#0058F8", "#00A800", "#FCA044", "#F87858", "#9878F8", "#58D854", "#00E8D8", "#F8B800", "#B8B8F8",
+            "#7C7C7C", "#6888FC", "#F85898", "#983800",
+        ];
+        let colors = hexes.into_iter().filter_map(RgbColor::from_hex).collect();
+        Self::new("NES", colors).unwrap_or_else(|_| Self::monochrome())
+    }
+
+    /// PICO-8 (16 iconic fantasy console colors)
+    pub fn pico_8() -> Self {
+        let hexes = [
+            "#000000", "#1D2B53", "#7E2553", "#008751", "#AB5236", "#5F574F", "#C2C3C7", "#FFF1E8", "#FF004D", "#FFA300", "#FFEC27", "#00E436",
+            "#29ADFF", "#83769C", "#FF77A8", "#FFCCAA",
+        ];
+        let colors = hexes.into_iter().filter_map(RgbColor::from_hex).collect();
+        Self::new("PICO-8", colors).unwrap_or_else(|_| Self::monochrome())
+    }
+}
+
+/// 3D KD-Tree for O(log K) accelerated nearest neighbor search in RGB color space.
+#[derive(Debug, Clone)]
+pub struct PaletteKdTree {
+    root: Option<Box<KdNode>>,
+}
+
+#[derive(Debug, Clone)]
+struct KdNode {
+    point: [i32; 3],
+    color: RgbColor,
+    axis: usize,
+    left: Option<Box<KdNode>>,
+    right: Option<Box<KdNode>>,
+}
+
+impl PaletteKdTree {
+    /// Builds a balanced 3D KD-Tree from the palette swatches.
+    pub fn build(palette: &Palette) -> Self {
+        let mut points: Vec<([i32; 3], RgbColor)> =
+            palette.swatches.iter().map(|s| ([s.color.r as i32, s.color.g as i32, s.color.b as i32], s.color)).collect();
+        let root = Self::build_recursive(&mut points, 0);
+        Self { root }
+    }
+
+    fn build_recursive(points: &mut [([i32; 3], RgbColor)], depth: usize) -> Option<Box<KdNode>> {
+        if points.is_empty() {
+            return None;
+        }
+        let axis = depth % 3;
+        points.sort_by_key(|p| p.0[axis]);
+        let mid = points.len() / 2;
+        let (point, color) = points[mid];
+
+        let left = Self::build_recursive(&mut points[..mid], depth + 1);
+        let right = Self::build_recursive(&mut points[mid + 1..], depth + 1);
+
+        Some(Box::new(KdNode { point, color, axis, left, right }))
+    }
+
+    /// Finds the nearest color in O(log K) expected time without heap allocations.
+    pub fn find_nearest(&self, target: &RgbColor) -> Option<RgbColor> {
+        let root = self.root.as_ref()?;
+        let target_pt = [target.r as i32, target.g as i32, target.b as i32];
+        let mut best_dist = i32::MAX;
+        let mut best_color = root.color;
+
+        Self::search_recursive(root, &target_pt, &mut best_dist, &mut best_color);
+        Some(best_color)
+    }
+
+    fn search_recursive(node: &KdNode, target: &[i32; 3], best_dist: &mut i32, best_color: &mut RgbColor) {
+        let dx = target[0] - node.point[0];
+        let dy = target[1] - node.point[1];
+        let dz = target[2] - node.point[2];
+        let dist = dx * dx + dy * dy + dz * dz;
+
+        if dist < *best_dist {
+            *best_dist = dist;
+            *best_color = node.color;
+        }
+
+        let axis = node.axis;
+        let diff = target[axis] - node.point[axis];
+        let (first, second) = if diff <= 0 { (&node.left, &node.right) } else { (&node.right, &node.left) };
+
+        if let Some(child) = first {
+            Self::search_recursive(child, target, best_dist, best_color);
+        }
+
+        if diff * diff < *best_dist
+            && let Some(child) = second
+        {
+            Self::search_recursive(child, target, best_dist, best_color);
         }
     }
 }

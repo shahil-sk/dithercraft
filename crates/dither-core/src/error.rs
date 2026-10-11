@@ -11,6 +11,8 @@ pub enum DitherError {
     InvalidParameter(String),
     /// Image dimensions must be greater than zero.
     ZeroDimension,
+    /// Failed to load or parse a palette or preset.
+    PresetLoadFailed(String),
 }
 
 impl fmt::Display for DitherError {
@@ -22,6 +24,7 @@ impl fmt::Display for DitherError {
             Self::EmptyPalette => write!(f, "color palette cannot be empty"),
             Self::InvalidParameter(msg) => write!(f, "invalid parameter: {msg}"),
             Self::ZeroDimension => write!(f, "image width and height must be non-zero"),
+            Self::PresetLoadFailed(msg) => write!(f, "preset load failed: {msg}"),
         }
     }
 }

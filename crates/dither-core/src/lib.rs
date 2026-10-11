@@ -22,11 +22,11 @@ pub mod vector;
 
 pub use algorithms::*;
 pub use buffer::ImageBuffer;
-pub use color::RgbColor;
+pub use color::{LabColor, RgbColor};
 pub use color_depth::{LuminosityMapping, MismatchMode};
-pub use effects::{ChromaticAberration, EpsilonGlow, JpegGlitchCore, JpegSubMode};
+pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen, VintageCrtSimulation};
 pub use error::DitherError;
-pub use palette::{Palette, Swatch};
+pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykHalftone, PopTone};
 pub use temporal::TemporalNoisePattern;
 pub use vector::BlackVectorIsolation;

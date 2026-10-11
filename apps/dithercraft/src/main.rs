@@ -1,7 +1,12 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use dither_core::{
-    ImageBuffer, algorithms::*, color::RgbColor, effects::*, palette::Palette, renderers::*, temporal::TemporalNoisePattern,
+    ImageBuffer,
+    algorithms::*,
+    color::RgbColor,
+    effects::*,
+    palette::{ColorMetric, Palette},
+    temporal::TemporalNoisePattern,
     vector::BlackVectorIsolation,
 };
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
@@ -81,6 +86,7 @@ pub struct DitherCraftApp {
 
     // Processing configuration
     selected_algo: String,
+    algo_search_query: String,
     selected_palette_name: String,
     active_palette: Palette,
     tonal_cycle_step: usize,
@@ -98,6 +104,17 @@ pub struct DitherCraftApp {
     glitch_enabled: bool,
     glitch_mode: JpegSubMode,
     glitch_intensity: f32,
+
+    crt_enabled: bool,
+    crt_scanline: f32,
+    crt_barrel: f32,
+    crt_vignette: f32,
+
+    blur_enabled: bool,
+    blur_sigma: f32,
+
+    sharpen_enabled: bool,
+    sharpen_amount: f32,
 
     temporal_noise_enabled: bool,
     temporal_pattern: TemporalNoisePattern,
@@ -137,6 +154,7 @@ impl DitherCraftApp {
             rendered_image: None,
             texture: None,
             selected_algo: "Floyd-Steinberg".into(),
+            algo_search_query: String::new(),
             selected_palette_name: "Game Boy".into(),
             active_palette: Palette::game_boy(),
             tonal_cycle_step: 0,
@@ -153,6 +171,17 @@ impl DitherCraftApp {
             glitch_enabled: false,
             glitch_mode: JpegSubMode::BlockShift,
             glitch_intensity: 0.4,
+
+            crt_enabled: false,
+            crt_scanline: 0.25,
+            crt_barrel: 0.08,
+            crt_vignette: 0.3,
+
+            blur_enabled: false,
+            blur_sigma: 1.5,
+
+            sharpen_enabled: false,
+            sharpen_amount: 0.8,
 
             temporal_noise_enabled: false,
             temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
@@ -195,6 +224,20 @@ impl DitherCraftApp {
             None
         };
 
+        let crt_opt = if self.crt_enabled {
+            Some(VintageCrtSimulation {
+                scanline_intensity: self.crt_scanline,
+                barrel_curvature: self.crt_barrel,
+                vignette_intensity: self.crt_vignette,
+            })
+        } else {
+            None
+        };
+
+        let blur_opt = if self.blur_enabled { Some(GaussianBlur::new(self.blur_sigma)) } else { None };
+
+        let sharpen_opt = if self.sharpen_enabled { Some(Sharpen::new(self.sharpen_amount, 1.0)) } else { None };
+
         let temporal_opt =
             if self.temporal_noise_enabled { Some((self.temporal_pattern, self.frame_counter, self.temporal_intensity)) } else { None };
 
@@ -202,31 +245,11 @@ impl DitherCraftApp {
 
         rayon::spawn(move || {
             let start = Instant::now();
-            let algo: Box<dyn DitherAlgorithm> = match algo_name.as_str() {
-                "Bayer 2x2" => Box::new(Bayer2x2),
-                "Bayer 4x4" => Box::new(Bayer4x4),
-                "Bayer 8x8" => Box::new(Bayer8x8),
-                "Bayer 16x16" => Box::new(Bayer16x16),
-                "Clustered Dot 4x4" => Box::new(ClusteredDot4x4),
-                "Clustered Dot 8x8" => Box::new(ClusteredDot8x8),
-                "Interleaved Gradient Noise" => Box::new(InterleavedGradientNoise),
-                "Atkinson" => Box::new(Atkinson::default()),
-                "Burkes" => Box::new(Burkes::default()),
-                "Sierra-3" => Box::new(Sierra3::default()),
-                "Sierra-Lite" => Box::new(SierraLite::default()),
-                "Stucki" => Box::new(Stucki::default()),
-                "Fixed Threshold" => Box::new(FixedThreshold::default()),
-                "Adaptive Otsu" => Box::new(OtsuThreshold),
-                "Mean Threshold" => Box::new(MeanThreshold),
-                "Multi-Level Step" => Box::new(MultiLevelStep::default()),
-                "CMYK Halftone" => Box::new(CmykHalftone::default()),
-                "Pop Tone" => Box::new(PopTone::default()),
-                _ => Box::new(FloydSteinberg::default()),
-            };
+            let algo: Box<dyn DitherAlgorithm> = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
 
             let mut out = algo.apply(&source, &palette).unwrap_or_else(|_| (*source).clone());
 
-            // Post-effects
+            // Post-effects stack
             if let Some(glow) = glow_opt {
                 out = glow.apply(&out).unwrap_or(out);
             }
@@ -235,6 +258,15 @@ impl DitherCraftApp {
             }
             if let Some(glitch) = glitch_opt {
                 out = glitch.apply(&out).unwrap_or(out);
+            }
+            if let Some(crt) = crt_opt {
+                out = crt.apply(&out).unwrap_or(out);
+            }
+            if let Some(blur) = blur_opt {
+                out = blur.apply(&out).unwrap_or(out);
+            }
+            if let Some(sharpen) = sharpen_opt {
+                out = sharpen.apply(&out).unwrap_or(out);
             }
             if let Some((pattern, frame, intensity)) = temporal_opt {
                 out = pattern.apply(&out, frame, intensity).unwrap_or(out);
@@ -293,6 +325,15 @@ impl eframe::App for DitherCraftApp {
                         ui.close_menu();
                     }
 
+                    if ui.button("Save Rendered PNG...").clicked() {
+                        if let Some(ref img) = self.rendered_image
+                            && let Some(path) = rfd::FileDialog::new().add_filter("PNG Image", &["png"]).save_file()
+                        {
+                            let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                        }
+                        ui.close_menu();
+                    }
+
                     if ui.button("Export Black Vector SVG...").clicked() {
                         let save_target = self
                             .rendered_image
@@ -303,6 +344,41 @@ impl eframe::App for DitherCraftApp {
                             if let Ok(svg) = isolator.trace_to_svg(img) {
                                 let _ = std::fs::write(path, svg);
                             }
+                        }
+                        ui.close_menu();
+                    }
+
+                    ui.separator();
+
+                    if ui.button("Import Palette...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("Palette", &["json", "hex", "gpl", "pal"]).pick_file()
+                            && let Ok(pal) = Palette::import_from_file(&path)
+                        {
+                            self.selected_palette_name = pal.name.clone();
+                            self.active_palette = pal;
+                            self.trigger_render();
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Extract Palette (Median Cut 16)...").clicked() {
+                        if let Some(ref src) = self.source_image
+                            && let Ok(pal) = Palette::from_image_median_cut("Median Cut 16", src, 16)
+                        {
+                            self.selected_palette_name = "Extracted Median Cut".into();
+                            self.active_palette = pal;
+                            self.trigger_render();
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Extract Palette (K-Means 16)...").clicked() {
+                        if let Some(ref src) = self.source_image
+                            && let Ok(pal) = Palette::from_image_kmeans("K-Means 16", src, 16, 10)
+                        {
+                            self.selected_palette_name = "Extracted K-Means".into();
+                            self.active_palette = pal;
+                            self.trigger_render();
                         }
                         ui.close_menu();
                     }
@@ -332,56 +408,73 @@ impl eframe::App for DitherCraftApp {
 
             let mut changed = false;
 
-            // Algorithm Picker
+            // Algorithm Search & Picker
             ui.group(|ui| {
                 ui.label("Dithering Algorithm:");
-                let algorithms = [
-                    "Floyd-Steinberg",
-                    "Atkinson",
-                    "Sierra-3",
-                    "Sierra-Lite",
-                    "Burkes",
-                    "Stucki",
-                    "Bayer 2x2",
-                    "Bayer 4x4",
-                    "Bayer 8x8",
-                    "Bayer 16x16",
-                    "Clustered Dot 4x4",
-                    "Clustered Dot 8x8",
-                    "Interleaved Gradient Noise",
-                    "Adaptive Otsu",
-                    "Fixed Threshold",
-                    "Multi-Level Step",
-                    "CMYK Halftone",
-                    "Pop Tone",
-                ];
-                egui::ComboBox::from_id_salt("algo_picker").selected_text(&self.selected_algo).show_ui(ui, |ui| {
-                    for a in algorithms {
-                        if ui.selectable_value(&mut self.selected_algo, a.into(), a).clicked() {
+                ui.horizontal(|ui| {
+                    ui.label("Search:");
+                    ui.text_edit_singleline(&mut self.algo_search_query);
+                });
+
+                let query = self.algo_search_query.to_lowercase();
+                let filtered: Vec<_> = dither_core::algorithms::ALL_ALGORITHMS
+                    .iter()
+                    .filter(|info| query.is_empty() || info.name.to_lowercase().contains(&query))
+                    .collect();
+
+                egui::ComboBox::from_id_salt("algo_picker").width(240.0).selected_text(&self.selected_algo).show_ui(ui, |ui| {
+                    for info in filtered {
+                        if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
                             changed = true;
                         }
                     }
                 });
             });
 
-            // Palette Controls
+            // Palette Controls & Color Science
             ui.group(|ui| {
-                ui.label("Target Palette:");
-                let palettes = ["Monochrome", "Game Boy", "CGA Mode 1", "Cyberpunk"];
+                ui.label("Target Palette & Metric:");
+                let palettes = ["Monochrome", "Macintosh 1-bit", "Game Boy", "CGA Mode 1", "Cyberpunk", "Apple II", "Commodore 64", "NES", "PICO-8"];
                 egui::ComboBox::from_id_salt("palette_picker").selected_text(&self.selected_palette_name).show_ui(ui, |ui| {
                     for p in palettes {
                         if ui.selectable_label(self.selected_palette_name == p, p).clicked() {
                             self.selected_palette_name = p.into();
+                            let metric = self.active_palette.metric;
                             self.active_palette = match p {
                                 "Monochrome" => Palette::monochrome(),
+                                "Macintosh 1-bit" => Palette::mac_1bit(),
                                 "CGA Mode 1" => Palette::cga_mode_1(),
                                 "Cyberpunk" => Palette::cyberpunk(),
+                                "Apple II" => Palette::apple_ii(),
+                                "Commodore 64" => Palette::commodore_64(),
+                                "NES" => Palette::nes(),
+                                "PICO-8" => Palette::pico_8(),
                                 _ => Palette::game_boy(),
                             };
+                            self.active_palette.metric = metric;
                             changed = true;
                         }
                     }
                 });
+
+                // Color Metric Selection
+                egui::ComboBox::from_id_salt("color_metric_picker")
+                    .selected_text(match self.active_palette.metric {
+                        ColorMetric::Redmean => "Redmean (Perceptual)",
+                        ColorMetric::EuclideanRgb => "Euclidean RGB",
+                        ColorMetric::CieLab => "CIELAB ΔE*",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (metric, label) in [
+                            (ColorMetric::Redmean, "Redmean (Perceptual)"),
+                            (ColorMetric::EuclideanRgb, "Euclidean RGB"),
+                            (ColorMetric::CieLab, "CIELAB ΔE*"),
+                        ] {
+                            if ui.selectable_value(&mut self.active_palette.metric, metric, label).clicked() {
+                                changed = true;
+                            }
+                        }
+                    });
 
                 ui.horizontal(|ui| {
                     if ui.button("Sort Luminance").clicked() {
@@ -421,9 +514,9 @@ impl eframe::App for DitherCraftApp {
                 }
             });
 
-            // Stackable Effects
+            // Stackable Downstream Effects
             ui.group(|ui| {
-                ui.label("Downstream Effects:");
+                ui.label("Downstream Effects Stack:");
                 if ui.checkbox(&mut self.glow_enabled, "Epsilon Glow Bloom").changed() {
                     changed = true;
                 }
@@ -474,6 +567,78 @@ impl eframe::App for DitherCraftApp {
                             }
                         });
                     if ui.add(egui::Slider::new(&mut self.glitch_intensity, 0.05..=1.0).text("Glitch Intensity")).changed() {
+                        changed = true;
+                    }
+                }
+
+                if ui.checkbox(&mut self.crt_enabled, "Vintage CRT Simulation").changed() {
+                    changed = true;
+                }
+                if self.crt_enabled {
+                    if ui.add(egui::Slider::new(&mut self.crt_scanline, 0.0..=1.0).text("Scanlines")).changed() {
+                        changed = true;
+                    }
+                    if ui.add(egui::Slider::new(&mut self.crt_barrel, 0.0..=0.3).text("Barrel")).changed() {
+                        changed = true;
+                    }
+                    if ui.add(egui::Slider::new(&mut self.crt_vignette, 0.0..=1.0).text("Vignette")).changed() {
+                        changed = true;
+                    }
+                }
+
+                if ui.checkbox(&mut self.blur_enabled, "Gaussian Blur").changed() {
+                    changed = true;
+                }
+                if self.blur_enabled && ui.add(egui::Slider::new(&mut self.blur_sigma, 0.2..=5.0).text("Sigma")).changed() {
+                    changed = true;
+                }
+
+                if ui.checkbox(&mut self.sharpen_enabled, "Sharpen").changed() {
+                    changed = true;
+                }
+                if self.sharpen_enabled && ui.add(egui::Slider::new(&mut self.sharpen_amount, 0.1..=3.0).text("Amount")).changed() {
+                    changed = true;
+                }
+            });
+
+            // Temporal Noise & Animation
+            ui.group(|ui| {
+                ui.label("Temporal Noise & Animation:");
+                if ui.checkbox(&mut self.temporal_noise_enabled, "Live Noise Stream").changed() {
+                    changed = true;
+                }
+                if self.temporal_noise_enabled {
+                    egui::ComboBox::from_id_salt("temporal_pattern_picker")
+                        .selected_text(match self.temporal_pattern {
+                            TemporalNoisePattern::CrtScanBeamJitter => "CRT Scan Beam Jitter",
+                            TemporalNoisePattern::PhosphorGrainHum => "Phosphor Grain Hum",
+                            TemporalNoisePattern::InterlacedFieldShimmer => "Interlaced Field Shimmer",
+                            TemporalNoisePattern::LcdSubpixelGridDrift => "LCD Grid Drift",
+                            TemporalNoisePattern::VhsTapePhaseNoise => "VHS Phase Noise",
+                            TemporalNoisePattern::ThermalAnalogDrift => "Thermal Analog Drift",
+                            TemporalNoisePattern::StaticHashWhiteNoise => "Static Hash Noise",
+                            TemporalNoisePattern::BayerPhaseStepping => "Bayer Phase Stepping",
+                            TemporalNoisePattern::BlueNoiseTemporalJitter => "Blue Noise Jitter",
+                        })
+                        .show_ui(ui, |ui| {
+                            for (pat, label) in [
+                                (TemporalNoisePattern::CrtScanBeamJitter, "CRT Scan Beam Jitter"),
+                                (TemporalNoisePattern::PhosphorGrainHum, "Phosphor Grain Hum"),
+                                (TemporalNoisePattern::InterlacedFieldShimmer, "Interlaced Field Shimmer"),
+                                (TemporalNoisePattern::LcdSubpixelGridDrift, "LCD Grid Drift"),
+                                (TemporalNoisePattern::VhsTapePhaseNoise, "VHS Phase Noise"),
+                                (TemporalNoisePattern::ThermalAnalogDrift, "Thermal Analog Drift"),
+                                (TemporalNoisePattern::StaticHashWhiteNoise, "Static Hash Noise"),
+                                (TemporalNoisePattern::BayerPhaseStepping, "Bayer Phase Stepping"),
+                                (TemporalNoisePattern::BlueNoiseTemporalJitter, "Blue Noise Jitter"),
+                            ] {
+                                if ui.selectable_value(&mut self.temporal_pattern, pat, label).clicked() {
+                                    changed = true;
+                                }
+                            }
+                        });
+
+                    if ui.add(egui::Slider::new(&mut self.temporal_intensity, 0.05..=1.0).text("Noise Intensity")).changed() {
                         changed = true;
                     }
                 }

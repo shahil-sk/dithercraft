@@ -169,3 +169,228 @@ impl DitherAlgorithm for MultiLevelStep {
         Ok(out)
     }
 }
+
+/// Precompute integral sum and squared sum images for fast O(1) local window statistics.
+fn compute_integral_images(input: &ImageBuffer) -> (Vec<u64>, Vec<u64>, usize, usize) {
+    let width = input.width as usize;
+    let height = input.height as usize;
+    let stride = width + 1;
+    let mut int_sum = vec![0u64; (width + 1) * (height + 1)];
+    let mut int_sq = vec![0u64; (width + 1) * (height + 1)];
+
+    for y in 0..height {
+        let mut row_sum = 0u64;
+        let mut row_sq = 0u64;
+        let row_in = y * width * 3;
+        let out_row_curr = (y + 1) * stride;
+        let out_row_prev = y * stride;
+
+        for x in 0..width {
+            let in_idx = row_in + x * 3;
+            let lum = RgbColor::new(input.data[in_idx], input.data[in_idx + 1], input.data[in_idx + 2]).luminance() as u64;
+            row_sum += lum;
+            row_sq += lum * lum;
+            int_sum[out_row_curr + x + 1] = int_sum[out_row_prev + x + 1] + row_sum;
+            int_sq[out_row_curr + x + 1] = int_sq[out_row_prev + x + 1] + row_sq;
+        }
+    }
+
+    (int_sum, int_sq, width, height)
+}
+
+/// Gaussian Local Adaptive Threshold
+#[derive(Debug, Clone)]
+pub struct GaussianLocalThreshold {
+    pub radius: usize,
+    pub c: f64,
+}
+
+impl Default for GaussianLocalThreshold {
+    fn default() -> Self {
+        Self { radius: 7, c: 5.0 }
+    }
+}
+
+impl DitherAlgorithm for GaussianLocalThreshold {
+    fn name(&self) -> &'static str {
+        "Gaussian Local Threshold"
+    }
+
+    fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
+        if palette.is_empty() {
+            return Err(DitherError::EmptyPalette);
+        }
+        let (int_sum, _, width, height) = compute_integral_images(input);
+        let stride = width + 1;
+        let radius = self.radius.max(1);
+        let c = self.c;
+        let mut out = ImageBuffer::new(input.width, input.height)?;
+
+        out.data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row_out)| {
+            let y0 = y.saturating_sub(radius);
+            let y1 = (y + radius).min(height - 1);
+            let row_in = y * width * 3;
+
+            for x in 0..width {
+                let x0 = x.saturating_sub(radius);
+                let x1 = (x + radius).min(width - 1);
+                let count = ((x1 - x0 + 1) * (y1 - y0 + 1)) as f64;
+
+                let p1 = int_sum[y0 * stride + x0];
+                let p2 = int_sum[y0 * stride + (x1 + 1)];
+                let p3 = int_sum[(y1 + 1) * stride + x0];
+                let p4 = int_sum[(y1 + 1) * stride + (x1 + 1)];
+                let mean = (p4 + p1 - p2 - p3) as f64 / count;
+
+                let in_idx = row_in + x * 3;
+                let lum = RgbColor::new(input.data[in_idx], input.data[in_idx + 1], input.data[in_idx + 2]).luminance() as f64;
+                let thresh = (mean - c).clamp(0.0, 255.0);
+
+                let binarized = if lum >= thresh { RgbColor::WHITE } else { RgbColor::BLACK };
+                let q = palette.find_nearest(&binarized);
+                let out_idx = x * 3;
+                row_out[out_idx] = q.r;
+                row_out[out_idx + 1] = q.g;
+                row_out[out_idx + 2] = q.b;
+            }
+        });
+
+        Ok(out)
+    }
+}
+
+/// Niblack Adaptive Binarization (Wayne Niblack 1986): T = m + k * s
+#[derive(Debug, Clone)]
+pub struct NiblackBinarization {
+    pub radius: usize,
+    pub k: f64,
+}
+
+impl Default for NiblackBinarization {
+    fn default() -> Self {
+        Self { radius: 7, k: -0.2 }
+    }
+}
+
+impl DitherAlgorithm for NiblackBinarization {
+    fn name(&self) -> &'static str {
+        "Niblack Binarization"
+    }
+
+    fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
+        if palette.is_empty() {
+            return Err(DitherError::EmptyPalette);
+        }
+        let (int_sum, int_sq, width, height) = compute_integral_images(input);
+        let stride = width + 1;
+        let radius = self.radius.max(1);
+        let k = self.k;
+        let mut out = ImageBuffer::new(input.width, input.height)?;
+
+        out.data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row_out)| {
+            let y0 = y.saturating_sub(radius);
+            let y1 = (y + radius).min(height - 1);
+            let row_in = y * width * 3;
+
+            for x in 0..width {
+                let x0 = x.saturating_sub(radius);
+                let x1 = (x + radius).min(width - 1);
+                let count = ((x1 - x0 + 1) * (y1 - y0 + 1)) as f64;
+
+                let p1 = int_sum[y0 * stride + x0];
+                let p2 = int_sum[y0 * stride + (x1 + 1)];
+                let p3 = int_sum[(y1 + 1) * stride + x0];
+                let p4 = int_sum[(y1 + 1) * stride + (x1 + 1)];
+                let m = (p4 + p1 - p2 - p3) as f64 / count;
+
+                let q1 = int_sq[y0 * stride + x0];
+                let q2 = int_sq[y0 * stride + (x1 + 1)];
+                let q3 = int_sq[(y1 + 1) * stride + x0];
+                let q4 = int_sq[(y1 + 1) * stride + (x1 + 1)];
+                let mean_sq = (q4 + q1 - q2 - q3) as f64 / count;
+                let s = (mean_sq - m * m).max(0.0).sqrt();
+
+                let in_idx = row_in + x * 3;
+                let lum = RgbColor::new(input.data[in_idx], input.data[in_idx + 1], input.data[in_idx + 2]).luminance() as f64;
+                let thresh = (m + k * s).clamp(0.0, 255.0);
+
+                let binarized = if lum >= thresh { RgbColor::WHITE } else { RgbColor::BLACK };
+                let q = palette.find_nearest(&binarized);
+                let out_idx = x * 3;
+                row_out[out_idx] = q.r;
+                row_out[out_idx + 1] = q.g;
+                row_out[out_idx + 2] = q.b;
+            }
+        });
+
+        Ok(out)
+    }
+}
+
+/// Sauvola Adaptive Binarization (Sauvola & Pietikäinen 2000): T = m * (1 + k * (s / 128 - 1))
+#[derive(Debug, Clone)]
+pub struct SauvolaBinarization {
+    pub radius: usize,
+    pub k: f64,
+}
+
+impl Default for SauvolaBinarization {
+    fn default() -> Self {
+        Self { radius: 7, k: 0.2 }
+    }
+}
+
+impl DitherAlgorithm for SauvolaBinarization {
+    fn name(&self) -> &'static str {
+        "Sauvola Binarization"
+    }
+
+    fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
+        if palette.is_empty() {
+            return Err(DitherError::EmptyPalette);
+        }
+        let (int_sum, int_sq, width, height) = compute_integral_images(input);
+        let stride = width + 1;
+        let radius = self.radius.max(1);
+        let k = self.k;
+        let mut out = ImageBuffer::new(input.width, input.height)?;
+
+        out.data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row_out)| {
+            let y0 = y.saturating_sub(radius);
+            let y1 = (y + radius).min(height - 1);
+            let row_in = y * width * 3;
+
+            for x in 0..width {
+                let x0 = x.saturating_sub(radius);
+                let x1 = (x + radius).min(width - 1);
+                let count = ((x1 - x0 + 1) * (y1 - y0 + 1)) as f64;
+
+                let p1 = int_sum[y0 * stride + x0];
+                let p2 = int_sum[y0 * stride + (x1 + 1)];
+                let p3 = int_sum[(y1 + 1) * stride + x0];
+                let p4 = int_sum[(y1 + 1) * stride + (x1 + 1)];
+                let m = (p4 + p1 - p2 - p3) as f64 / count;
+
+                let q1 = int_sq[y0 * stride + x0];
+                let q2 = int_sq[y0 * stride + (x1 + 1)];
+                let q3 = int_sq[(y1 + 1) * stride + x0];
+                let q4 = int_sq[(y1 + 1) * stride + (x1 + 1)];
+                let mean_sq = (q4 + q1 - q2 - q3) as f64 / count;
+                let s = (mean_sq - m * m).max(0.0).sqrt();
+
+                let in_idx = row_in + x * 3;
+                let lum = RgbColor::new(input.data[in_idx], input.data[in_idx + 1], input.data[in_idx + 2]).luminance() as f64;
+                let thresh = (m * (1.0 + k * (s / 128.0 - 1.0))).clamp(0.0, 255.0);
+
+                let binarized = if lum >= thresh { RgbColor::WHITE } else { RgbColor::BLACK };
+                let q = palette.find_nearest(&binarized);
+                let out_idx = x * 3;
+                row_out[out_idx] = q.r;
+                row_out[out_idx + 1] = q.g;
+                row_out[out_idx + 2] = q.b;
+            }
+        });
+
+        Ok(out)
+    }
+}

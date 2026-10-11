@@ -38,6 +38,18 @@ pub static DIAGONAL_LINES_4X4: [u8; 16] = [0, 4, 8, 12, 4, 8, 12, 0, 8, 12, 0, 4
 // Checkerboard 4x4
 pub static CHECKERBOARD_4X4: [u8; 16] = [0, 8, 0, 8, 8, 0, 8, 0, 0, 8, 0, 8, 8, 0, 8, 0];
 
+// Central White Point 4x4
+pub static CENTRAL_WHITE_POINT_4X4: [u8; 16] = [15, 14, 13, 12, 11, 3, 2, 10, 9, 1, 0, 8, 7, 6, 5, 4];
+
+// Dispersed Dot 8x8 (Ulichney 1987)
+pub static DISPERSED_DOT_8X8: [u8; 64] = [
+    0, 48, 12, 60, 3, 51, 15, 63, 32, 16, 44, 28, 35, 19, 47, 31, 8, 56, 4, 52, 11, 59, 7, 55, 40, 24, 36, 20, 43, 27, 39, 23, 2, 50, 14, 62, 1, 49,
+    13, 61, 34, 18, 46, 30, 33, 17, 45, 29, 10, 58, 6, 54, 9, 57, 5, 53, 42, 26, 38, 22, 41, 25, 37, 21,
+];
+
+// Spiral 4x4
+pub static SPIRAL_4X4: [u8; 16] = [15, 14, 13, 12, 4, 3, 2, 11, 5, 0, 1, 10, 6, 7, 8, 9];
+
 /// Helper to execute ordered dithering over rows in parallel using Rayon.
 pub fn apply_matrix(input: &ImageBuffer, palette: &Palette, matrix: &[u8], dim: usize, divisor: i32) -> Result<ImageBuffer, DitherError> {
     if palette.is_empty() {
@@ -220,6 +232,39 @@ impl DitherAlgorithm for Checkerboard45 {
     }
     fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
         apply_matrix(input, palette, &CHECKERBOARD_4X4, 4, 16)
+    }
+}
+
+#[derive(Default)]
+pub struct CentralWhitePoint;
+impl DitherAlgorithm for CentralWhitePoint {
+    fn name(&self) -> &'static str {
+        "Central White Point"
+    }
+    fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
+        apply_matrix(input, palette, &CENTRAL_WHITE_POINT_4X4, 4, 16)
+    }
+}
+
+#[derive(Default)]
+pub struct DispersedDot;
+impl DitherAlgorithm for DispersedDot {
+    fn name(&self) -> &'static str {
+        "Dispersed Dot"
+    }
+    fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
+        apply_matrix(input, palette, &DISPERSED_DOT_8X8, 8, 64)
+    }
+}
+
+#[derive(Default)]
+pub struct Spiral;
+impl DitherAlgorithm for Spiral {
+    fn name(&self) -> &'static str {
+        "Spiral"
+    }
+    fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
+        apply_matrix(input, palette, &SPIRAL_4X4, 4, 16)
     }
 }
 

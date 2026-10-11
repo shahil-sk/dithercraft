@@ -34,6 +34,17 @@ enum Commands {
         #[arg(short, long, default_value_t = 128)]
         threshold: u8,
     },
+    /// Process all images in a directory concurrently
+    Batch {
+        #[arg(short, long)]
+        input_dir: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(short, long, default_value = "floyd-steinberg")]
+        algo: String,
+        #[arg(short, long, default_value = "gameboy")]
+        palette: String,
+    },
     /// Run internal latency and throughput micro-benchmarks
     Bench,
 }
@@ -51,30 +62,28 @@ fn save_image(path: &Path, buffer: &ImageBuffer) -> Result<(), Box<dyn std::erro
 }
 
 fn select_palette(name: &str) -> Palette {
+    let p = Path::new(name);
+    if p.exists()
+        && let Ok(pal) = Palette::import_from_file(p)
+    {
+        return pal;
+    }
+
     match name.to_lowercase().as_str() {
         "mono" | "monochrome" | "1bit" => Palette::monochrome(),
-        "cga" => Palette::cga_mode_1(),
+        "mac" | "mac1bit" => Palette::mac_1bit(),
+        "cga" | "cga1" => Palette::cga_mode_1(),
         "cyberpunk" => Palette::cyberpunk(),
+        "apple" | "apple2" | "appleii" => Palette::apple_ii(),
+        "c64" | "commodore" | "commodore64" => Palette::commodore_64(),
+        "nes" => Palette::nes(),
+        "pico8" | "pico-8" | "pico" => Palette::pico_8(),
         _ => Palette::game_boy(),
     }
 }
 
 fn select_algorithm(name: &str) -> Box<dyn DitherAlgorithm> {
-    match name.to_lowercase().as_str() {
-        "bayer" | "bayer8" | "bayer8x8" => Box::new(Bayer8x8),
-        "bayer4" | "bayer4x4" => Box::new(Bayer4x4),
-        "bayer16" | "bayer16x16" => Box::new(Bayer16x16),
-        "atkinson" => Box::new(Atkinson::default()),
-        "burkes" => Box::new(Burkes::default()),
-        "sierra" | "sierra3" => Box::new(Sierra3::default()),
-        "sierra-lite" => Box::new(SierraLite::default()),
-        "stucki" => Box::new(Stucki::default()),
-        "cmyk" | "cmyk-halftone" => Box::new(CmykHalftone::default()),
-        "pop-tone" => Box::new(PopTone::default()),
-        "ign" => Box::new(InterleavedGradientNoise),
-        "otsu" => Box::new(OtsuThreshold),
-        _ => Box::new(FloydSteinberg::default()),
-    }
+    create_algorithm(name).unwrap_or_else(|| Box::new(FloydSteinberg::default()))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -110,6 +119,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(&output, svg)?;
             let elapsed = start.elapsed();
             println!("Isolated black vectors from {} into {} in {:.2}ms", input.display(), output.display(), elapsed.as_secs_f64() * 1000.0);
+        }
+
+        Commands::Batch { input_dir, output_dir, algo, palette } => {
+            let start = Instant::now();
+            let pal = select_palette(&palette);
+            let algo_name = algo.clone();
+
+            std::fs::create_dir_all(&output_dir)?;
+
+            let mut paths = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&input_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file()
+                        && let Some(ext) = path.extension().and_then(|s| s.to_str())
+                    {
+                        match ext.to_lowercase().as_str() {
+                            "png" | "jpg" | "jpeg" | "webp" | "bmp" => paths.push(path),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let total_count = paths.len();
+            println!("==> Batch processing {} images with {} [{}]:", total_count, algo_name, pal.name);
+
+            use rayon::prelude::*;
+            let processed_count: usize = paths
+                .par_iter()
+                .map(|in_path| {
+                    let file_stem = in_path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+                    let out_path = output_dir.join(format!("{}_{}.png", file_stem, algo_name));
+
+                    if let Ok(img) = load_image(in_path) {
+                        let algorithm = select_algorithm(&algo_name);
+                        if let Ok(dithered) = algorithm.apply(&img, &pal)
+                            && save_image(&out_path, &dithered).is_ok()
+                        {
+                            return 1;
+                        }
+                    }
+                    0
+                })
+                .sum();
+
+            let elapsed = start.elapsed();
+            println!(
+                "Batch complete: {}/{} images processed in {:.2}s ({:.1} images/sec)",
+                processed_count,
+                total_count,
+                elapsed.as_secs_f64(),
+                (processed_count as f64) / elapsed.as_secs_f64().max(0.001)
+            );
         }
 
         Commands::Bench => {
