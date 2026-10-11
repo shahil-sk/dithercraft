@@ -4,5 +4,21 @@
 /corpus
 /log
 .DS_Store
+
+# Code review graph
 .code-review-graph/
 **/.code-review-graph/
+
+# AI assistant configurations, tool metadata, and editor rules
+CODEBUDDY.md
+QODER.md
+GEMINI.md
+opencode.jsonc
+.windsurfrules
+.winsurfrules
+.cursorrules
+.claude/
+.gemini/
+.qoder/
+.github/
+.mcp.json
