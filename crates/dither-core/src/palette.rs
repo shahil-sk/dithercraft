@@ -11,6 +11,8 @@ pub enum ColorMetric {
     Redmean,
     EuclideanRgb,
     CieLab,
+    Oklab,
+    Ciede2000,
 }
 
 /// Color swatch entry with lock state.
@@ -111,6 +113,26 @@ impl Palette {
                     }
                 }
             }
+            ColorMetric::Oklab => {
+                let mut min_dist = f32::MAX;
+                for swatch in &self.swatches {
+                    let dist = target.distance_oklab(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_color = swatch.color;
+                    }
+                }
+            }
+            ColorMetric::Ciede2000 => {
+                let mut min_dist = f32::MAX;
+                for swatch in &self.swatches {
+                    let dist = target.distance_ciede2000(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_color = swatch.color;
+                    }
+                }
+            }
         }
 
         best_color
@@ -148,6 +170,26 @@ impl Palette {
                 let mut min_dist = f32::MAX;
                 for (idx, swatch) in self.swatches.iter().enumerate() {
                     let dist = target.distance_cielab_de(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_idx = idx;
+                    }
+                }
+            }
+            ColorMetric::Oklab => {
+                let mut min_dist = f32::MAX;
+                for (idx, swatch) in self.swatches.iter().enumerate() {
+                    let dist = target.distance_oklab(&swatch.color);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_idx = idx;
+                    }
+                }
+            }
+            ColorMetric::Ciede2000 => {
+                let mut min_dist = f32::MAX;
+                for (idx, swatch) in self.swatches.iter().enumerate() {
+                    let dist = target.distance_ciede2000(&swatch.color);
                     if dist < min_dist {
                         min_dist = dist;
                         best_idx = idx;

@@ -94,6 +94,59 @@ impl RgbColor {
         (dl * dl + da * da + db * db).sqrt()
     }
 
+    /// Convert sRGB 8-bit channels to linear RGB [0.0, 1.0].
+    #[inline]
+    pub fn to_linear_f32(&self) -> (f32, f32, f32) {
+        let to_lin = |c: u8| -> f32 {
+            let v = c as f32 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        (to_lin(self.r), to_lin(self.g), to_lin(self.b))
+    }
+
+    /// Convert linear RGB [0.0, 1.0] to gamma-compressed sRGB 8-bit.
+    #[inline]
+    pub fn from_linear_f32(r: f32, g: f32, b: f32) -> Self {
+        let to_srgb = |v: f32| -> u8 {
+            let clamped = v.clamp(0.0, 1.0);
+            let s = if clamped <= 0.0031308 { clamped * 12.92 } else { 1.055 * clamped.powf(1.0 / 2.4) - 0.055 };
+            (s * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+        };
+        Self::new(to_srgb(r), to_srgb(g), to_srgb(b))
+    }
+
+    /// Convert sRGB to Björn Ottosson's OKLab color space.
+    #[allow(clippy::excessive_precision)]
+    pub fn to_oklab(&self) -> OklabColor {
+        let (r_lin, g_lin, b_lin) = self.to_linear_f32();
+
+        let l = 0.4122214708 * r_lin + 0.5363325363 * g_lin + 0.0514459929 * b_lin;
+        let m = 0.2119034982 * r_lin + 0.6806995451 * g_lin + 0.1073969566 * b_lin;
+        let s = 0.0883024619 * r_lin + 0.2817188376 * g_lin + 0.6299787005 * b_lin;
+
+        let l_ = l.max(0.0).cbrt();
+        let m_ = m.max(0.0).cbrt();
+        let s_ = s.max(0.0).cbrt();
+
+        OklabColor {
+            l: 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+            a: 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+            b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+        }
+    }
+
+    /// Squared perceptual color difference in OKLab color space.
+    #[inline]
+    pub fn distance_oklab(&self, other: &Self) -> f32 {
+        self.to_oklab().delta_e_sq(&other.to_oklab())
+    }
+
+    /// CIEDE2000 (ΔE00) perceptual color difference.
+    #[inline]
+    pub fn distance_ciede2000(&self, other: &Self) -> f32 {
+        self.to_lab().delta_e_ciede2000(&other.to_lab())
+    }
+
     /// Parse a 6-character hex string (e.g. "#FF00FF" or "FF00FF").
     pub fn from_hex(hex: &str) -> Option<Self> {
         let s = hex.strip_prefix('#').unwrap_or(hex);
@@ -118,4 +171,111 @@ pub struct LabColor {
     pub l: f32,
     pub a: f32,
     pub b: f32,
+}
+
+impl LabColor {
+    /// CIEDE2000 (ΔE00) total color difference formula (ISO/CIE standard).
+    pub fn delta_e_ciede2000(&self, other: &Self) -> f32 {
+        let l1 = self.l;
+        let a1 = self.a;
+        let b1 = self.b;
+        let l2 = other.l;
+        let a2 = other.a;
+        let b2 = other.b;
+
+        let c1_star = (a1 * a1 + b1 * b1).sqrt();
+        let c2_star = (a2 * a2 + b2 * b2).sqrt();
+        let c_bar_star = (c1_star + c2_star) * 0.5;
+
+        let c_bar_7 = c_bar_star.powi(7);
+        let g = 0.5 * (1.0 - (c_bar_7 / (c_bar_7 + 25.0f32.powi(7))).sqrt());
+
+        let a1_prime = (1.0 + g) * a1;
+        let a2_prime = (1.0 + g) * a2;
+
+        let c1_prime = (a1_prime * a1_prime + b1 * b1).sqrt();
+        let c2_prime = (a2_prime * a2_prime + b2 * b2).sqrt();
+        let c_bar_prime = (c1_prime + c2_prime) * 0.5;
+
+        let to_deg = |rad: f32| -> f32 {
+            let deg = rad.to_degrees();
+            if deg < 0.0 { deg + 360.0 } else { deg }
+        };
+
+        let h1_prime = if a1_prime == 0.0 && b1 == 0.0 { 0.0 } else { to_deg(b1.atan2(a1_prime)) };
+        let h2_prime = if a2_prime == 0.0 && b2 == 0.0 { 0.0 } else { to_deg(b2.atan2(a2_prime)) };
+
+        let delta_l_prime = l2 - l1;
+        let l_bar_prime = (l1 + l2) * 0.5;
+
+        let delta_c_prime = c2_prime - c1_prime;
+
+        let delta_h_deg = if c1_prime * c2_prime == 0.0 {
+            0.0
+        } else if (h2_prime - h1_prime).abs() <= 180.0 {
+            h2_prime - h1_prime
+        } else if h2_prime - h1_prime > 180.0 {
+            (h2_prime - h1_prime) - 360.0
+        } else {
+            (h2_prime - h1_prime) + 360.0
+        };
+
+        let delta_h_prime = 2.0 * (c1_prime * c2_prime).sqrt() * (delta_h_deg.to_radians() * 0.5).sin();
+
+        let h_bar_prime = if c1_prime * c2_prime == 0.0 {
+            h1_prime + h2_prime
+        } else if (h1_prime - h2_prime).abs() <= 180.0 {
+            (h1_prime + h2_prime) * 0.5
+        } else if h1_prime + h2_prime < 360.0 {
+            (h1_prime + h2_prime + 360.0) * 0.5
+        } else {
+            (h1_prime + h2_prime - 360.0) * 0.5
+        };
+
+        let t = 1.0 - 0.17 * (h_bar_prime - 30.0).to_radians().cos()
+            + 0.24 * (2.0 * h_bar_prime).to_radians().cos()
+            + 0.32 * (3.0 * h_bar_prime + 6.0).to_radians().cos()
+            - 0.20 * (4.0 * h_bar_prime - 63.0).to_radians().cos();
+
+        let delta_theta = 30.0 * (-((h_bar_prime - 275.0) / 25.0).powi(2)).exp();
+        let c_bar_prime_7 = c_bar_prime.powi(7);
+        let r_c = 2.0 * (c_bar_prime_7 / (c_bar_prime_7 + 25.0f32.powi(7))).sqrt();
+
+        let l_bar_minus_50_sq = (l_bar_prime - 50.0).powi(2);
+        let s_l = 1.0 + (0.015 * l_bar_minus_50_sq) / (20.0 + l_bar_minus_50_sq).sqrt();
+        let s_c = 1.0 + 0.045 * c_bar_prime;
+        let s_h = 1.0 + 0.015 * c_bar_prime * t;
+
+        let r_t = -(2.0 * delta_theta.to_radians()).sin() * r_c;
+
+        let dl_term = delta_l_prime / s_l;
+        let dc_term = delta_c_prime / s_c;
+        let dh_term = delta_h_prime / s_h;
+
+        let de_sq = dl_term * dl_term + dc_term * dc_term + dh_term * dh_term + r_t * dc_term * dh_term;
+        de_sq.max(0.0).sqrt()
+    }
+}
+
+/// Björn Ottosson's OKLab color representation (perceptually uniform with stable blue hues).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct OklabColor {
+    pub l: f32,
+    pub a: f32,
+    pub b: f32,
+}
+
+impl OklabColor {
+    #[inline]
+    pub fn delta_e_sq(&self, other: &Self) -> f32 {
+        let dl = self.l - other.l;
+        let da = self.a - other.a;
+        let db = self.b - other.b;
+        dl * dl + da * da + db * db
+    }
+
+    #[inline]
+    pub fn delta_e(&self, other: &Self) -> f32 {
+        self.delta_e_sq(other).sqrt()
+    }
 }

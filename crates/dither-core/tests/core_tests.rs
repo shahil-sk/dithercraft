@@ -1,4 +1,11 @@
-use dither_core::{ImageBuffer, algorithms::*, color::RgbColor, effects::*, palette::Palette, vector::BlackVectorIsolation};
+use dither_core::{
+    ImageBuffer,
+    algorithms::*,
+    color::RgbColor,
+    effects::*,
+    palette::{ColorMetric, Palette},
+    vector::BlackVectorIsolation,
+};
 
 #[test]
 fn test_image_buffer_creation_and_pixel_access() {
@@ -371,4 +378,45 @@ fn test_all_9_temporal_noise_patterns() {
         assert_eq!(applied.data.len(), 16 * 16 * 3);
         assert!(!pat.name().is_empty());
     }
+}
+
+#[test]
+fn test_oklab_color_distance_and_perceptual_metric() {
+    let red = RgbColor::new(255, 0, 0);
+    let dark_red = RgbColor::new(180, 0, 0);
+    let blue = RgbColor::new(0, 0, 255);
+
+    let ok_red = red.to_oklab();
+    let ok_blue = blue.to_oklab();
+    assert!(ok_red.l > 0.0 && ok_red.l <= 1.0);
+    assert!(ok_blue.l > 0.0 && ok_blue.l <= 1.0);
+
+    let d_red_darkred = red.distance_oklab(&dark_red);
+    let d_red_blue = red.distance_oklab(&blue);
+    assert!(d_red_darkred < d_red_blue);
+
+    // Test Palette nearest color lookup with OKLab
+    let pal = Palette::new("Test", vec![RgbColor::new(0, 0, 0), RgbColor::new(255, 0, 0), RgbColor::new(0, 0, 255)]).expect("pal");
+    let nearest = pal.find_nearest_with_metric(&RgbColor::new(200, 10, 10), ColorMetric::Oklab);
+    assert_eq!(nearest, RgbColor::new(255, 0, 0));
+}
+
+#[test]
+fn test_ciede2000_color_distance_and_perceptual_metric() {
+    let red = RgbColor::new(255, 0, 0);
+    let dark_red = RgbColor::new(180, 0, 0);
+    let blue = RgbColor::new(0, 0, 255);
+
+    let d_same = red.distance_ciede2000(&red);
+    assert!(d_same < 1e-4);
+
+    let d_red_darkred = red.distance_ciede2000(&dark_red);
+    let d_red_blue = red.distance_ciede2000(&blue);
+    assert!(d_red_darkred > 0.0);
+    assert!(d_red_darkred < d_red_blue);
+
+    // Test Palette nearest color lookup with CIEDE2000
+    let pal = Palette::new("Test", vec![RgbColor::new(0, 0, 0), RgbColor::new(255, 0, 0), RgbColor::new(0, 0, 255)]).expect("pal");
+    let nearest = pal.find_nearest_with_metric(&RgbColor::new(200, 10, 10), ColorMetric::Ciede2000);
+    assert_eq!(nearest, RgbColor::new(255, 0, 0));
 }

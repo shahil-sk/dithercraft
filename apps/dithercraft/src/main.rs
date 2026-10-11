@@ -13,6 +13,7 @@ use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::{AnimationDecoder, Frame, RgbaImage};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
@@ -78,6 +79,8 @@ impl StudioTheme {
 struct RenderJobResult {
     buffer: ImageBuffer,
     duration_ms: f64,
+    gen_id: u64,
+    swatch_counts: Vec<usize>,
 }
 
 pub struct DitherCraftApp {
@@ -148,7 +151,17 @@ pub struct DitherCraftApp {
     logo_texture: Option<TextureHandle>,
     show_about: bool,
 
-    // Threading channels
+    // Interactive Canvas Ergonomics
+    canvas_pan: egui::Vec2,
+    canvas_zoom: f32,
+    show_pixel_grid: bool,
+
+    // Swatch utilization statistics
+    swatch_percentages: Vec<f32>,
+
+    // Threading, cancellation & UI wakeups
+    render_generation: Arc<AtomicU64>,
+    egui_ctx: egui::Context,
     tx: Sender<RenderJobResult>,
     rx: Receiver<RenderJobResult>,
     is_rendering: bool,
@@ -157,6 +170,8 @@ pub struct DitherCraftApp {
 impl DitherCraftApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = channel();
+        let render_generation = Arc::new(AtomicU64::new(0));
+        let egui_ctx = cc.egui_ctx.clone();
 
         let logo_texture =
             image::load_from_memory(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/io.github.dithercraft.png")).ok().map(|img| {
@@ -240,6 +255,14 @@ impl DitherCraftApp {
             logo_texture,
             show_about: false,
 
+            canvas_pan: egui::Vec2::ZERO,
+            canvas_zoom: 1.0,
+            show_pixel_grid: true,
+
+            swatch_percentages: Vec::new(),
+
+            render_generation,
+            egui_ctx,
             tx,
             rx,
             is_rendering: false,
@@ -298,17 +321,32 @@ impl DitherCraftApp {
             if self.temporal_noise_enabled { Some((self.temporal_pattern, self.frame_counter, self.temporal_intensity)) } else { None };
 
         self.is_rendering = true;
+        let gen_id = self.render_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let cancel_token = self.render_generation.clone();
+        let ctx = self.egui_ctx.clone();
 
         rayon::spawn(move || {
             let start = Instant::now();
+            if cancel_token.load(Ordering::Relaxed) != gen_id {
+                return;
+            }
+
             let algo: Box<dyn DitherAlgorithm> = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
 
             let mut out = algo.apply(&source, &palette).unwrap_or_else(|_| (*source).clone());
+
+            if cancel_token.load(Ordering::Relaxed) != gen_id {
+                return;
+            }
 
             // Post-effects stack
             if let Some(glow) = glow_opt {
                 out = glow.apply(&out).unwrap_or(out);
             }
+            if cancel_token.load(Ordering::Relaxed) != gen_id {
+                return;
+            }
+
             if let Some(chromatic) = chromatic_opt {
                 out = chromatic.apply(&out).unwrap_or(out);
             }
@@ -328,8 +366,25 @@ impl DitherCraftApp {
                 out = pattern.apply(&out, frame, intensity).unwrap_or(out);
             }
 
+            if cancel_token.load(Ordering::Relaxed) != gen_id {
+                return;
+            }
+
+            // Compute swatch utilization counts for live histogram
+            let mut swatch_counts = vec![0usize; palette.swatches.len()];
+            if !palette.swatches.is_empty() {
+                for chunk in out.data.chunks_exact(3) {
+                    let px = RgbColor::new(chunk[0], chunk[1], chunk[2]);
+                    let idx = palette.find_nearest_index(&px);
+                    if idx < swatch_counts.len() {
+                        swatch_counts[idx] += 1;
+                    }
+                }
+            }
+
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let _ = tx.send(RenderJobResult { buffer: out, duration_ms });
+            let _ = tx.send(RenderJobResult { buffer: out, duration_ms, gen_id, swatch_counts });
+            ctx.request_repaint();
         });
     }
 
@@ -389,10 +444,16 @@ impl eframe::App for DitherCraftApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Poll worker thread results
         while let Ok(result) = self.rx.try_recv() {
-            self.rendered_image = Some(result.buffer);
-            self.render_latency_ms = result.duration_ms;
-            self.is_rendering = false;
-            self.update_texture(ctx);
+            if result.gen_id == self.render_generation.load(Ordering::Relaxed) {
+                let total_px = (result.buffer.width * result.buffer.height) as f32;
+                if total_px > 0.0 {
+                    self.swatch_percentages = result.swatch_counts.iter().map(|&cnt| (cnt as f32 / total_px) * 100.0).collect();
+                }
+                self.rendered_image = Some(result.buffer);
+                self.render_latency_ms = result.duration_ms;
+                self.is_rendering = false;
+                self.update_texture(ctx);
+            }
         }
 
         // Apply theme
@@ -409,13 +470,19 @@ impl eframe::App for DitherCraftApp {
                             if is_gif
                                 && let Ok(file) = std::fs::File::open(&path)
                                 && let Ok(decoder) = GifDecoder::new(std::io::BufReader::new(file))
-                                && let Ok(raw_frames) = decoder.into_frames().collect_frames()
+                                && let Ok(mut raw_frames) = decoder.into_frames().collect_frames()
                                 && !raw_frames.is_empty()
                             {
+                                if raw_frames.len() > 300 {
+                                    raw_frames.truncate(300);
+                                }
                                 let mut frames = Vec::new();
                                 let mut delays = Vec::new();
                                 for frame in raw_frames {
                                     let (w, h) = (frame.buffer().width(), frame.buffer().height());
+                                    if (w as u64) * (h as u64) > 16 * 1024 * 1024 {
+                                        continue;
+                                    }
                                     let (num, denom) = frame.delay().numer_denom_ms();
                                     let delay_ms = num.checked_div(denom).map(|d| d.max(10)).unwrap_or(100);
                                     let mut rgb_data = Vec::with_capacity((w * h * 3) as usize);
@@ -435,6 +502,8 @@ impl eframe::App for DitherCraftApp {
                                     self.source_image = Some(frames[0].clone());
                                     self.source_frames = frames;
                                     self.frame_delays = delays;
+                                    self.canvas_pan = egui::Vec2::ZERO;
+                                    self.canvas_zoom = 1.0;
                                     self.status_text = format!("Loaded animated GIF ({} frames)", self.source_frames.len());
                                     self.trigger_render();
                                 }
@@ -450,6 +519,8 @@ impl eframe::App for DitherCraftApp {
                                     self.frame_delays = vec![100];
                                     self.timeline_max_frames = 60;
                                     self.timeline_frame = 0;
+                                    self.canvas_pan = egui::Vec2::ZERO;
+                                    self.canvas_zoom = 1.0;
                                     self.status_text = format!("Loaded static image ({w}x{h})");
                                     self.trigger_render();
                                 }
@@ -732,9 +803,13 @@ impl eframe::App for DitherCraftApp {
                         ColorMetric::Redmean => "Redmean (Perceptual)",
                         ColorMetric::EuclideanRgb => "Euclidean RGB",
                         ColorMetric::CieLab => "CIELAB ΔE*",
+                        ColorMetric::Oklab => "OKLab (Perceptual)",
+                        ColorMetric::Ciede2000 => "CIEDE2000 ΔE00",
                     })
                     .show_ui(ui, |ui| {
                         for (metric, label) in [
+                            (ColorMetric::Oklab, "OKLab (Perceptual)"),
+                            (ColorMetric::Ciede2000, "CIEDE2000 ΔE00"),
                             (ColorMetric::Redmean, "Redmean (Perceptual)"),
                             (ColorMetric::EuclideanRgb, "Euclidean RGB"),
                             (ColorMetric::CieLab, "CIELAB ΔE*"),
@@ -746,20 +821,36 @@ impl eframe::App for DitherCraftApp {
                     });
 
                 ui.horizontal(|ui| {
-                    if ui.button("Sort Luminance").clicked() {
+                    if ui.button("Sort Lum").clicked() {
                         self.active_palette.sort_by_luminance(true);
                         changed = true;
                     }
-                    if ui.button("Randomize Unlocked").clicked() {
+                    if ui.button("Randomize").clicked() {
                         self.active_palette.randomize_unlocked(Instant::now().elapsed().as_nanos() as u64);
                         changed = true;
                     }
+                    if ui.button("Prune Dead").on_hover_text("Prune unlocked swatches with <0.1% usage").clicked()
+                        && !self.swatch_percentages.is_empty()
+                        && self.active_palette.swatches.len() == self.swatch_percentages.len()
+                    {
+                        let mut pruned = Vec::new();
+                        for (i, swatch) in self.active_palette.swatches.iter().enumerate() {
+                            let pct = self.swatch_percentages.get(i).copied().unwrap_or(0.0);
+                            if swatch.locked || pct >= 0.1 {
+                                pruned.push(*swatch);
+                            }
+                        }
+                        if !pruned.is_empty() && pruned.len() < self.active_palette.swatches.len() {
+                            self.active_palette.swatches = pruned;
+                            changed = true;
+                        }
+                    }
                 });
 
-                // Swatches list with lock toggles
-                ui.label("Swatches & Slot Locks:");
+                // Swatches list with lock toggles and live utilization
+                ui.label("Swatches & Live Utilization:");
                 let mut lock_changed = false;
-                for swatch in &mut self.active_palette.swatches {
+                for (idx, swatch) in self.active_palette.swatches.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         let (r, g, b) = (swatch.color.r, swatch.color.g, swatch.color.b);
                         let c = Color32::from_rgb(r, g, b);
@@ -767,6 +858,9 @@ impl eframe::App for DitherCraftApp {
                         ui.painter().rect_filled(rect, 2.0, c);
                         if ui.checkbox(&mut swatch.locked, format!("#{r:02X}{g:02X}{b:02X}")).changed() {
                             lock_changed = true;
+                        }
+                        if let Some(&pct) = self.swatch_percentages.get(idx) {
+                            ui.label(format!("{pct:4.1}%"));
                         }
                     });
                 }
@@ -922,16 +1016,124 @@ impl eframe::App for DitherCraftApp {
             }
         });
 
-        // Center Viewport
+        // Center Viewport Interactive Canvas
         egui::CentralPanel::default().show(ctx, |ui| {
+            let available_rect = ui.available_rect_before_wrap();
+            let (response, painter) = ui.allocate_painter(available_rect.size(), egui::Sense::click_and_drag());
+
+            // Pan interaction:
+            // Middle-click drag, Right-click drag, or Space/Alt + Left-click drag
+            let is_panning = response.dragged_by(egui::PointerButton::Middle)
+                || response.dragged_by(egui::PointerButton::Secondary)
+                || (response.dragged_by(egui::PointerButton::Primary) && ui.input(|i| i.modifiers.alt || i.key_down(egui::Key::Space)));
+
+            if is_panning {
+                self.canvas_pan += response.drag_delta();
+            }
+
+            // Smooth Zoom interaction centered on mouse cursor
+            if response.hovered() {
+                let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+                if scroll_delta.abs() > 0.0 {
+                    let zoom_factor = if scroll_delta > 0.0 { 1.15 } else { 1.0 / 1.15 };
+                    let old_zoom = self.canvas_zoom;
+                    let new_zoom = (old_zoom * zoom_factor).clamp(0.05, 32.0);
+                    if (new_zoom - old_zoom).abs() > f32::EPSILON {
+                        if let Some(pointer_pos) = response.hover_pos() {
+                            let canvas_center = available_rect.center();
+                            let to_pointer = pointer_pos - canvas_center - self.canvas_pan;
+                            self.canvas_pan += to_pointer * (1.0 - new_zoom / old_zoom);
+                        }
+                        self.canvas_zoom = new_zoom;
+                    }
+                }
+            }
+
+            // Canvas background
+            painter.rect_filled(available_rect, 0.0, ui.visuals().extreme_bg_color);
+
             if let Some(tex) = &self.texture {
-                ui.centered_and_justified(|ui| {
-                    ui.image(tex);
+                let (tex_w, tex_h) = (tex.size()[0] as f32, tex.size()[1] as f32);
+                let img_size = egui::vec2(tex_w * self.canvas_zoom, tex_h * self.canvas_zoom);
+                let img_center = available_rect.center() + self.canvas_pan;
+                let img_rect = egui::Rect::from_center_size(img_center, img_size);
+
+                let clipped_painter = painter.with_clip_rect(available_rect);
+
+                // Subtle shadow/border around image
+                clipped_painter.rect_stroke(img_rect, 0.0, egui::Stroke::new(1.0_f32, Color32::from_gray(50)));
+
+                // Draw image
+                clipped_painter.image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+
+                // Pixel Grid Overlay (at >= 800% zoom)
+                if self.show_pixel_grid && self.canvas_zoom >= 8.0 {
+                    let step = self.canvas_zoom;
+                    let grid_color = Color32::from_rgba_unmultiplied(255, 255, 255, 30);
+                    let grid_stroke = egui::Stroke::new(1.0_f32, grid_color);
+
+                    let min_x = img_rect.min.x.max(available_rect.min.x);
+                    let max_x = img_rect.max.x.min(available_rect.max.x);
+                    let min_y = img_rect.min.y.max(available_rect.min.y);
+                    let max_y = img_rect.max.y.min(available_rect.max.y);
+
+                    let start_col = ((min_x - img_rect.min.x) / step).floor().max(0.0) as usize;
+                    let end_col = ((max_x - img_rect.min.x) / step).ceil().min(tex_w) as usize;
+                    for col in start_col..=end_col {
+                        let x = img_rect.min.x + col as f32 * step;
+                        if x >= available_rect.min.x && x <= available_rect.max.x {
+                            clipped_painter.line_segment([egui::pos2(x, min_y), egui::pos2(x, max_y)], grid_stroke);
+                        }
+                    }
+
+                    let start_row = ((min_y - img_rect.min.y) / step).floor().max(0.0) as usize;
+                    let end_row = ((max_y - img_rect.min.y) / step).ceil().min(tex_h) as usize;
+                    for row in start_row..=end_row {
+                        let y = img_rect.min.y + row as f32 * step;
+                        if y >= available_rect.min.y && y <= available_rect.max.y {
+                            clipped_painter.line_segment([egui::pos2(min_x, y), egui::pos2(max_x, y)], grid_stroke);
+                        }
+                    }
+                }
+
+                // Floating Viewport HUD
+                let hud_size = egui::vec2(280.0, 34.0);
+                let hud_rect = egui::Rect::from_min_size(egui::pos2(available_rect.max.x - hud_size.x - 16.0, available_rect.min.y + 16.0), hud_size);
+
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(hud_rect), |ui| {
+                    egui::Frame::window(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button("1:1").on_hover_text("Reset to 100%").clicked() {
+                                self.canvas_zoom = 1.0;
+                                self.canvas_pan = egui::Vec2::ZERO;
+                            }
+                            if ui.button("Fit").on_hover_text("Fit to Viewport").clicked() {
+                                let margin = 40.0;
+                                let scale_x = (available_rect.width() - margin) / tex_w;
+                                let scale_y = (available_rect.height() - margin) / tex_h;
+                                self.canvas_zoom = scale_x.min(scale_y).clamp(0.05, 32.0);
+                                self.canvas_pan = egui::Vec2::ZERO;
+                            }
+                            if ui.button("−").clicked() {
+                                self.canvas_zoom = (self.canvas_zoom / 1.25).clamp(0.05, 32.0);
+                            }
+                            ui.label(format!("{:.0}%", self.canvas_zoom * 100.0));
+                            if ui.button("+").clicked() {
+                                self.canvas_zoom = (self.canvas_zoom * 1.25).clamp(0.05, 32.0);
+                            }
+                            ui.separator();
+                            ui.checkbox(&mut self.show_pixel_grid, "Grid");
+                        });
+                    });
                 });
             } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("No image loaded. Use File -> Open Image...");
-                });
+                painter.text(
+                    available_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "No image loaded. Use File -> Open Image...",
+                    egui::FontId::proportional(16.0),
+                    Color32::from_gray(140),
+                );
             }
         });
 

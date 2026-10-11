@@ -22,7 +22,7 @@ pub mod vector;
 
 pub use algorithms::*;
 pub use buffer::ImageBuffer;
-pub use color::{LabColor, RgbColor};
+pub use color::{LabColor, OklabColor, RgbColor};
 pub use color_depth::{LuminosityMapping, MismatchMode};
 pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen, VintageCrtSimulation};
 pub use error::DitherError;

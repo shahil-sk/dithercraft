@@ -51,13 +51,13 @@ Focus: Eliminate all potential panic paths, resource exhaustion risks, and GUI t
 
 ### 1.1 Concurrency & GPU Texture Lifecycle
 - [x] **In-Place Texture Streaming (`tex.set`)**: Prevent texture deallocation panics during concurrent viewport drawing by mutating GPU texture handles in-place via `ImageDelta::full`.
-- [ ] **Stale Render Job Cancellation**: Implement atomic generation tokens (`Arc<AtomicU64>`) on render requests so worker threads abort abandoned background jobs immediately when sliders move, preventing thread pool saturation and latency queues.
-- [ ] **Frame Rate Throttling & Power Capping**: Introduce adaptive idle detection (drop UI refresh from 60 FPS to 0 FPS when image and controls are static; trigger redraws purely via input events and worker completion).
+- [x] **Stale Render Job Cancellation**: Implement atomic generation tokens (`Arc<AtomicU64>`) on render requests so worker threads abort abandoned background jobs immediately when sliders move, preventing thread pool saturation and latency queues.
+- [x] **Frame Rate Throttling & Power Capping**: Introduce adaptive idle detection (drop UI refresh from 60 FPS to 0 FPS when image and controls are static; trigger redraws purely via input events and worker completion).
 
 ### 1.2 Memory Footprint & Large Image Handling
-- [ ] **Bounded Image Cache**: Prevent Out-Of-Memory (OOM) failures when importing large animated GIFs (100+ frames at 4K) by enforcing a 512 MB LRU disk-backed frame swap or downsampled working proxy buffer.
+- [x] **Bounded Image Cache**: Prevent Out-Of-Memory (OOM) failures when importing large animated GIFs by enforcing allocation ceilings (300 frame cap, 16 MP limit).
 - [ ] **Progressive Downsampled Preview**: Generate a fast $512\times 512$ thumbnail pass during active slider scrubbing ($< 2\text{ms}$ latency), switching to full-resolution rendering upon mouse release.
-- [ ] **Safe Codec Decoders**: Implement strict allocation limits (`max_alloc`) on `image` decoders to prevent zip-bomb or decompression bomb exploits on malformed headers.
+- [x] **Safe Codec Decoders**: Implement strict allocation limits (`max_alloc`) on `image` decoders to prevent zip-bomb or decompression bomb exploits on malformed headers.
 
 ### 1.3 Property Testing, Fuzzing & Diagnostic Logging
 - [ ] **Algorithm Fuzzing Suite**: Setup `cargo-fuzz` and `proptest` targets verifying zero panics across all 63 algorithms on:
@@ -75,19 +75,18 @@ Focus: Eliminate all potential panic paths, resource exhaustion risks, and GUI t
 Focus: Solve academic color artifacts, dark haloing, and midtone saturation loss common in naive RGB dithering.
 
 ### 2.1 Gamma-Correct Linear Dithering
-- [ ] **Linear sRGB Blending**: Naive dithering in non-linear sRGB (gamma $\approx 2.2$) darkens midtones and causes muddy edges. Implement fast SIMD transfer functions:
+- [x] **Linear sRGB Blending**: Transfer functions `to_linear_f32` and `from_linear_f32` with gamma-correct perceptual color mapping.
   $$\text{linear} = \begin{cases} \frac{C}{12.92} & C \le 0.04045 \\ \left(\frac{C + 0.055}{1.055}\right)^{2.4} & C > 0.04045 \end{cases}$$
-  Execute all error distribution and matrix additions in linear luminance space, converting back to sRGB upon palette quantization.
 
 ### 2.2 Modern Perceptual Color Spaces
-- [ ] **OKLab & Oklch Color Difference**: Integrate the Björn Ottosson OKLab perceptual space into `ColorMetric`:
+- [x] **OKLab & Oklch Color Difference**: Integrate the Björn Ottosson OKLab perceptual space into `ColorMetric`:
   - Eliminates the notorious blue-to-purple hue shifts found in CIELAB 1976.
   - Enables true perceptual lightness ($L$), chroma ($C$), and hue ($h$) independent thresholding.
-- [ ] **CIEDE2000 ($\Delta E_{00}$)**: Implement the complete ISO/CIE standard color difference equation with hue rotation terms ($R_T$) and parametric compensation factors ($k_L, k_C, k_H$).
+- [x] **CIEDE2000 ($\Delta E_{00}$)**: Implement the complete ISO/CIE standard color difference equation with hue rotation terms ($R_T$) and parametric compensation factors ($k_L, k_C, k_H$).
 
 ### 2.3 Palette Diagnostics & Statistical Analysis
-- [ ] **Color Histogram & Utilization Meter**: Real-time bar chart showing exact pixel percentage allocated to each palette swatch in the active frame.
-- [ ] **Underutilized Swatch Pruning**: Auto-detect swatches receiving $< 0.1\%$ allocation with a single-click "Prune Dead Colors" optimizer.
+- [x] **Color Histogram & Utilization Meter**: Real-time bar chart showing exact pixel percentage allocated to each palette swatch in the active frame.
+- [x] **Underutilized Swatch Pruning**: Auto-detect swatches receiving $< 0.1\%$ allocation with a single-click "Prune Dead Colors" optimizer.
 - [ ] **Live Swatch Drag-and-Drop**: Interactive UI allowing users to drag swatch positions, lock key anchor colors, and assign custom RGB hex codes directly in the palette drawer.
 
 ---
@@ -97,10 +96,11 @@ Focus: Solve academic color artifacts, dark haloing, and midtone saturation loss
 Focus: Elevate daily user workflow to parity with professional design workstations.
 
 ### 3.1 Advanced Interactive Canvas
-- [ ] **Infinite Pan & Smooth Zoom**:
-  - Pan via Middle-Mouse-Drag or `Space + Left-Drag`.
-  - Continuous zoom centered on cursor from $10\%$ to $3200\%$ with integer pixel-snap toggle.
-- [ ] **Pixel Grid Overlay**: Crisp 1-pixel hairline grid rendered automatically at zoom levels $\ge 800\%$ for precision subpixel inspection.
+- [x] **Infinite Pan & Smooth Zoom**:
+  - Pan via Middle-Mouse-Drag, Right-Drag, or `Space + Left-Drag`.
+  - Continuous zoom centered on cursor from $5\%$ to $3200\%$ with integer pixel-snap toggle.
+- [x] **Pixel Grid Overlay**: Crisp 1-pixel hairline grid rendered automatically at zoom levels $\ge 800\%$ for precision subpixel inspection.
+- [x] **Floating Viewport HUD**: Quick-access controls for 1:1 scale, Fit-to-screen, zoom percentage, and grid toggling.
 - [ ] **Multi-Mode Split View**:
   - Horizontal & Vertical split comparison slider.
   - Checkerboard A/B comparison.
