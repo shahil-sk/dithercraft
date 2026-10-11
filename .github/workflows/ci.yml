@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  check-format-clippy-test:
+    name: Lint, Test & Layer Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux GUI Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libx11-xcb-dev libxkbcommon-dev libwayland-dev
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Cargo Check
+        run: cargo check --workspace --all-targets
+
+      - name: Cargo Clippy (Strict Quality Gate)
+        run: |
+          cargo clippy --workspace --all-targets -- \
+            -D warnings \
+            -A clippy::type_complexity
+
+      - name: Verify Clean-Room Core Decoupling
+        run: |
+          if [ -d "crates/dither-core" ]; then
+            if grep -E 'egui|eframe|winit' crates/dither-core/Cargo.toml 2>/dev/null; then
+              echo "::error::crates/dither-core must not depend on GUI libraries (egui/eframe/winit)"
+              exit 1
+            fi
+          fi
+
+      - name: Cargo Test
+        run: cargo test --workspace --all-targets
+
+      - name: Release Build Verification
+        run: cargo build --release --workspace
