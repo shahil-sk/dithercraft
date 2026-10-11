@@ -1,0 +1,28 @@
+{
+  "mcp": {
+    "code-review-graph": {
+      "type": "local",
+      "command": [
+        "/home/sk/.local/bin/code-review-graph",
+        "mcp",
+        "--auto-watch",
+        "--repo",
+        "/mnt/5893accc-4b16-4de7-b2a7-6333530b2614/PROJECTS/21_Active/dither-guy"
+      ]
+    },
+    "codebase-memory-mcp": {
+      "type": "local",
+      "command": [
+        "/home/sk/.local/bin/codebase-memory-mcp"
+      ]
+    },
+    "headroom": {
+      "type": "local",
+      "command": [
+        "/home/sk/.local/bin/headroom",
+        "mcp",
+        "serve"
+      ]
+    }
+  }
+}

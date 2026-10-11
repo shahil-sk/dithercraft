@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "code-review-graph": {
+      "command": "/home/sk/.local/bin/code-review-graph",
+      "args": [
+        "mcp",
+        "--auto-watch",
+        "--repo",
+        "/mnt/5893accc-4b16-4de7-b2a7-6333530b2614/PROJECTS/21_Active/dither-guy"
+      ],
+      "cwd": "/mnt/5893accc-4b16-4de7-b2a7-6333530b2614/PROJECTS/21_Active/dither-guy",
+      "type": "stdio"
+    },
+    "codebase-memory-mcp": {
+      "command": "/home/sk/.local/bin/codebase-memory-mcp",
+      "type": "stdio"
+    },
+    "headroom": {
+      "command": "/home/sk/.local/bin/headroom",
+      "args": [
+        "mcp",
+        "serve"
+      ],
+      "type": "stdio"
+    }
+  }
+}

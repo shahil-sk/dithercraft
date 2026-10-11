@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=DitherCraft
+GenericName=Retro Dithering & Vintage Graphics Workstation
+Comment=Studio-grade desktop workstation for retro graphical dithering and vintage CRT effects
+Exec=dithercraft %F
+TryExec=dithercraft
+Icon=io.github.dithercraft
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.dithercraft
+Categories=Graphics;2DGraphics;RasterGraphics;
+Keywords=dither;retro;pixelart;halftone;crt;glitch;cmyk;svg;
+MimeType=image/png;image/jpeg;image/svg+xml;image/gif;

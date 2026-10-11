@@ -1,0 +1,8 @@
+*~
+/target
+/dist
+/corpus
+/log
+.DS_Store
+.code-review-graph/
+**/.code-review-graph/

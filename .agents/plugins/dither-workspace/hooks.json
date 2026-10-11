@@ -1,0 +1,16 @@
+{
+  "code-review-graph-updater": {
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /mnt/5893accc-4b16-4de7-b2a7-6333530b2614/PROJECTS/21_Active/dither-guy/.agents/hooks/crg-update.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

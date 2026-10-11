@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.dithercraft</id>
+  <name>DitherCraft</name>
+  <summary>Retro graphical dithering, DSP, and vintage CRT effects workstation</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>
+      DitherCraft is a studio-grade desktop workstation and DSP engine for retro graphical dithering,
+      vintage CRT simulations, creative glitch effects, and black vector isolation for CNC/vinyl cutters.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.dithercraft.desktop</launchable>
+  <url type="homepage">https://github.com/shahil-sk/dithercraft</url>
+</component>

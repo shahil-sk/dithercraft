@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (e.g. 0.9.0)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Parse version
+        run: |
+          v="${{ inputs.version }}"
+          if [ -z "$v" ]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          fi
+          v="${v#v}"
+          if [[ "$v" == *"-"* ]]; then
+            pre=true
+          else
+            pre=false
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "Building DitherCraft v$v" >> "$GITHUB_STEP_SUMMARY"
+
+  macos:
+    name: macOS Universal
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Build macOS Binaries
+        run: |
+          cargo build --release --target aarch64-apple-darwin -p dithercraft -p dithercraft-cli
+          cargo build --release --target x86_64-apple-darwin -p dithercraft -p dithercraft-cli
+          mkdir -p dist/release
+          if [ -f target/aarch64-apple-darwin/release/dithercraft ] && [ -f target/x86_64-apple-darwin/release/dithercraft ]; then
+            lipo -create -output dist/release/dithercraft-macos-universal \
+              target/aarch64-apple-darwin/release/dithercraft \
+              target/x86_64-apple-darwin/release/dithercraft
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/release/*
+
+  windows:
+    name: Windows x86_64
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Windows Binaries
+        shell: bash
+        run: |
+          cargo build --release -p dithercraft -p dithercraft-cli
+          mkdir -p dist/release
+          if [ -f target/release/dithercraft.exe ]; then
+            cp target/release/dithercraft.exe dist/release/dithercraft-windows-x86_64.exe
+          fi
+          if [ -f target/release/dithercraft-cli.exe ]; then
+            cp target/release/dithercraft-cli.exe dist/release/dithercraft-cli-windows-x86_64.exe
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dist/release/*
+
+  linux:
+    name: Linux x86_64
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Linux Binaries
+        run: |
+          cargo build --release -p dithercraft -p dithercraft-cli
+          mkdir -p dist/release
+          if [ -f target/release/dithercraft ]; then
+            cp target/release/dithercraft dist/release/dithercraft-linux-x86_64
+          fi
+          if [ -f target/release/dithercraft-cli ]; then
+            cp target/release/dithercraft-cli dist/release/dithercraft-cli-linux-x86_64
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist/release/*
+
+  publish:
+    name: Publish GitHub Release
+    needs: [version, macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-all
+
+      - name: Flatten Artifacts & Generate Checksums
+        run: |
+          mkdir -p release-artifacts
+          find dist-all -type f -exec cp {} release-artifacts/ \;
+          cd release-artifacts
+          sha256sum * > SHA256SUMS.txt || true
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: DitherCraft v${{ needs.version.outputs.version }}
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+          draft: false
+          files: release-artifacts/*
+          generate_release_notes: true
