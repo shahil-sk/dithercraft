@@ -376,7 +376,11 @@ impl DitherCraftApp {
             }
 
             let color_image = ColorImage::from_rgba_unmultiplied([width, height], &color_data);
-            self.texture = Some(ctx.load_texture("rendered_preview", color_image, TextureOptions::NEAREST));
+            if let Some(tex) = self.texture.as_mut() {
+                tex.set(color_image, TextureOptions::NEAREST);
+            } else {
+                self.texture = Some(ctx.load_texture("rendered_preview", color_image, TextureOptions::NEAREST));
+            }
         }
     }
 }
