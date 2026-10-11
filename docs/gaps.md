@@ -49,6 +49,26 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
   - Bundled 5 curated workstation profiles: *Game Boy Nostalgia*, *Cyberpunk Neon*, *1980s VHS Broadcast*, *Newspaper Halftone*, *Macintosh 1984 Classic*.
   - Added command history undo/redo stack with keyboard accelerators (`Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+Y`).
 
+### 2.6 Visvalingam-Whyatt Polygon Simplification & Bézier Splines
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented `visvalingam_simplify`: Area-elimination polyline simplification removing vertices by minimal triangular area, preserving natural organic outlines without angular spikes.
+  - Implemented `fit_cubic_spline` & `export_smooth_bezier_svg`: $C^1$-continuous piecewise cubic Bézier curve fitting over contours, generating smooth `<path d="M... C...">` vector strokes for AxiDraw plotters.
+
+### 2.7 Desktop Batch Processing Studio & Parallel Queue
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Built a dedicated Batch Processing Studio window inside the desktop application (`apps/dithercraft`).
+  - Enables folder-level multi-image batch conversion with non-blocking Rayon worker threads, asynchronous image decoding/encoding, and progress telemetry.
+
+### 2.8 Audio-Reactive DSP Modulation (Pure-Rust RIFF WAV)
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented zero-dependency pure-Rust `AudioTrack::parse_wav` decoding 8-bit, 16-bit, and 32-bit PCM audio streams.
+  - Implemented windowed multi-band spectrum analyzer `get_frame_spectrum` computing sub-bass, mid, treble, and RMS loudness to drive dither threshold pulsation, CRT jitter, and glitch bursts.
+
+### 2.9 Live Interactive Swatch Editing in Palette Drawer
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Integrated interactive `color_edit_button_srgb` color pickers for every swatch in the palette drawer.
+  - Added live dynamic swatch addition (`+ Add Swatch`), single-click swatch removal (`✕`), and instantaneous non-blocking canvas re-dithering.
+
 ---
 
 ## 3. Reliability & Zero-Panic Assurance

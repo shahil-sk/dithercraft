@@ -5,9 +5,9 @@ use dither_core::{
     algorithms::*,
     color::RgbColor,
     effects::*,
-    palette::{ColorMetric, Palette},
+    palette::{ColorMetric, Palette, Swatch},
     temporal::TemporalNoisePattern,
-    vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation},
+    vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, export_smooth_bezier_svg},
 };
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
@@ -380,6 +380,14 @@ pub struct DitherCraftApp {
     tx: Sender<RenderJobResult>,
     rx: Receiver<RenderJobResult>,
     is_rendering: bool,
+
+    // Batch Processing Studio
+    show_batch_studio: bool,
+    batch_input_dir: String,
+    batch_output_dir: String,
+    batch_status_msg: String,
+    batch_progress: f32,
+    batch_is_running: bool,
 }
 
 impl DitherCraftApp {
@@ -486,6 +494,13 @@ impl DitherCraftApp {
             tx,
             rx,
             is_rendering: false,
+
+            show_batch_studio: false,
+            batch_input_dir: String::new(),
+            batch_output_dir: String::new(),
+            batch_status_msg: "Ready".into(),
+            batch_progress: 0.0,
+            batch_is_running: false,
         }
     }
 
@@ -1069,6 +1084,27 @@ impl eframe::App for DitherCraftApp {
                         ui.close_menu();
                     }
 
+                    if ui.button("Export Smooth Bézier Spline SVG...").clicked() {
+                        let save_target = self
+                            .rendered_image
+                            .as_ref()
+                            .and_then(|img| rfd::FileDialog::new().add_filter("Smooth Bézier SVG", &["svg"]).save_file().map(|path| (img, path)));
+                        if let Some((img, path)) = save_target
+                            && let Ok(svg) = export_smooth_bezier_svg(img, 128, 0.5)
+                        {
+                            let _ = std::fs::write(path, svg);
+                            self.status_text = "Exported smooth Bézier spline SVG".into();
+                        }
+                        ui.close_menu();
+                    }
+
+                    ui.separator();
+
+                    if ui.button("Batch Processing Studio...").clicked() {
+                        self.show_batch_studio = true;
+                        ui.close_menu();
+                    }
+
                     ui.separator();
 
                     if ui.button("Import Palette...").clicked() {
@@ -1192,6 +1228,98 @@ impl eframe::App for DitherCraftApp {
             });
         }
 
+        // Batch Processing Studio Modal
+        if self.show_batch_studio {
+            egui::Window::new("Batch Processing Studio").resizable(true).default_width(500.0).open(&mut self.show_batch_studio).show(ctx, |ui| {
+                ui.heading("Batch Processing Queue");
+                ui.label("Process a folder of images using the active algorithm and palette.");
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Input Folder:");
+                    ui.text_edit_singleline(&mut self.batch_input_dir);
+                    if ui.button("Browse...").clicked()
+                        && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.batch_input_dir = folder.display().to_string();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Output Folder:");
+                    ui.text_edit_singleline(&mut self.batch_output_dir);
+                    if ui.button("Browse...").clicked()
+                        && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.batch_output_dir = folder.display().to_string();
+                    }
+                });
+
+                ui.separator();
+                ui.label(format!("Active Algorithm: {}", self.selected_algo));
+                ui.label(format!("Active Palette: {} ({} colors)", self.active_palette.name, self.active_palette.len()));
+                ui.add_space(4.0);
+
+                if self.batch_is_running {
+                    ui.add(egui::ProgressBar::new(self.batch_progress).show_percentage());
+                    ui.label(&self.batch_status_msg);
+                } else {
+                    if ui.button("▶ Run Batch Process").clicked() {
+                        let in_path = std::path::PathBuf::from(&self.batch_input_dir);
+                        let out_path = std::path::PathBuf::from(&self.batch_output_dir);
+                        if in_path.is_dir() && !self.batch_output_dir.is_empty() {
+                            self.batch_status_msg = "Batch processing running in background...".into();
+                            self.batch_progress = 1.0;
+
+                            let algo_name = self.selected_algo.clone();
+                            let pal = self.active_palette.clone();
+                            let ctx_clone = ctx.clone();
+
+                            rayon::spawn(move || {
+                                let _ = std::fs::create_dir_all(&out_path);
+                                let mut entries = Vec::new();
+                                if let Ok(rd) = std::fs::read_dir(&in_path) {
+                                    for e in rd.flatten() {
+                                        let p = e.path();
+                                        if let Some(ext) = p.extension().and_then(|x| x.to_str()).map(str::to_lowercase)
+                                            && ["png", "jpg", "jpeg", "webp", "bmp"].contains(&ext.as_str())
+                                        {
+                                            entries.push(p);
+                                        }
+                                    }
+                                }
+
+                                if !entries.is_empty() {
+                                    let algo = create_algorithm(&algo_name)
+                                        .unwrap_or_else(|| create_algorithm("Floyd-Steinberg").expect("default algorithm"));
+                                    for file_path in entries {
+                                        if let Ok(reader) = image::ImageReader::open(&file_path)
+                                            && let Ok(img) = reader.decode()
+                                        {
+                                            let rgb = img.to_rgb8();
+                                            let (w, h) = rgb.dimensions();
+                                            if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw())
+                                                && let Ok(out_buf) = algo.apply(&buf, &pal)
+                                                && let Some(fname) = file_path.file_name()
+                                            {
+                                                let dest = out_path.join(fname);
+                                                let _ =
+                                                    image::save_buffer(dest, &out_buf.data, out_buf.width, out_buf.height, image::ColorType::Rgb8);
+                                            }
+                                        }
+                                        ctx_clone.request_repaint();
+                                    }
+                                }
+                            });
+                        } else {
+                            self.batch_status_msg = "Please select valid input and output directories".into();
+                        }
+                    }
+                    ui.label(&self.batch_status_msg);
+                }
+            });
+        }
+
         // Left Control Panel
         egui::SidePanel::left("control_panel").min_width(280.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -1303,22 +1431,36 @@ impl eframe::App for DitherCraftApp {
                     }
                 });
 
-                // Swatches list with lock toggles and live utilization
-                ui.label("Swatches & Live Utilization:");
+                // Swatches list with live color pickers, locks, utilization, and add/remove buttons
+                ui.label("Swatches & Live Palette Editing:");
                 let mut lock_changed = false;
+                let mut delete_idx = None;
+                let num_swatches = self.active_palette.swatches.len();
                 for (idx, swatch) in self.active_palette.swatches.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        let (r, g, b) = (swatch.color.r, swatch.color.g, swatch.color.b);
-                        let c = Color32::from_rgb(r, g, b);
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, 2.0, c);
-                        if ui.checkbox(&mut swatch.locked, format!("#{r:02X}{g:02X}{b:02X}")).changed() {
+                        let mut rgb = [swatch.color.r, swatch.color.g, swatch.color.b];
+                        if ui.color_edit_button_srgb(&mut rgb).changed() {
+                            swatch.color = RgbColor::new(rgb[0], rgb[1], rgb[2]);
+                            lock_changed = true;
+                        }
+                        if ui.checkbox(&mut swatch.locked, "Lock").changed() {
                             lock_changed = true;
                         }
                         if let Some(&pct) = self.swatch_percentages.get(idx) {
                             ui.label(format!("{pct:4.1}%"));
                         }
+                        if num_swatches > 1 && ui.small_button("✕").on_hover_text("Remove swatch").clicked() {
+                            delete_idx = Some(idx);
+                        }
                     });
+                }
+                if let Some(d) = delete_idx {
+                    self.active_palette.swatches.remove(d);
+                    changed = true;
+                }
+                if ui.button("+ Add Swatch").clicked() {
+                    self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
+                    changed = true;
                 }
                 if lock_changed {
                     changed = true;

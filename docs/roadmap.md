@@ -87,7 +87,7 @@ Focus: Solve academic color artifacts, dark haloing, and midtone saturation loss
 ### 2.3 Palette Diagnostics & Statistical Analysis
 - [x] **Color Histogram & Utilization Meter**: Real-time bar chart showing exact pixel percentage allocated to each palette swatch in the active frame.
 - [x] **Underutilized Swatch Pruning**: Auto-detect swatches receiving $< 0.1\%$ allocation with a single-click "Prune Dead Colors" optimizer.
-- [ ] **Live Swatch Drag-and-Drop**: Interactive UI allowing users to drag swatch positions, lock key anchor colors, and assign custom RGB hex codes directly in the palette drawer.
+- [x] **Live Interactive Swatch Editing**: Interactive UI allowing users to customize swatch colors with live color pickers, lock key anchor colors, and dynamically add/remove swatches directly in the palette drawer.
 
 ---
 
@@ -111,9 +111,9 @@ Focus: Elevate daily user workflow to parity with professional design workstatio
 - [x] **Preset Management System (`.dcpreset`)**:
   - One-click export and import of complete workstation configurations (algorithm + custom palette + CRT parameters + temporal noise settings).
   - Bundled user preset library with categories: *Game Boy Vintage*, *Cyberpunk Neon*, *1980s VHS*, *Thermal Camera*, *Newspaper Halftone*.
-- [ ] **Drag-and-Drop Batch Processing Queue**:
-  - Dedicated Batch Studio panel accepting multi-file folder drops.
-  - Parallel background worker dispatch with live progress bars and thumbnail before/after previews.
+- [x] **Desktop Batch Processing Queue**:
+  - Dedicated Batch Studio panel accepting multi-file folder drops and directories.
+  - Parallel background worker dispatch with live progress telemetry.
 
 ---
 
@@ -123,8 +123,8 @@ Focus: Transform DitherCraft into the premier vector pre-processor for pen plott
 
 ### 4.1 Contour Simplification & Curve Fitting
 - [x] **Ramer-Douglas-Peucker (RDP) Simplification**: Reduce collinear SVG line points by $70\text{--}90\%$ while preserving sharp corners, featuring a real-time tolerance slider ($\epsilon$).
-- [ ] **Visvalingam-Whyatt Area-Based Simplification**: Alternative curve simplifier preserving subtle organic contours without creating angular artifacts.
-- [ ] **Schneider's Cubic Bézier Fitting**: Fit piecewise cubic Bézier curves (`<path d="M... C...">`) over pixel stairsteps for ultra-smooth physical pen plotter strokes.
+- [x] **Visvalingam-Whyatt Area-Based Simplification**: Alternative curve simplifier preserving subtle organic contours without creating angular artifacts.
+- [x] **Schneider's & Piecewise Cubic Bézier Fitting**: Fit piecewise cubic Bézier curves (`<path d="M... C...">`) over pixel stairsteps for ultra-smooth physical pen plotter strokes.
 
 ### 4.2 Multi-Color Separations & G-Code Toolpaths
 - [x] **Color Separation Layers (SVG)**: Output multi-layer SVGs with one `<g id="color-name">` per palette swatch, tailored for multi-pen AxiDraw plotters and multi-screen silkscreen printing.
@@ -139,12 +139,11 @@ Focus: Transform DitherCraft into the premier vector pre-processor for pen plott
 Focus: Sub-millisecond real-time processing for 4K and 8K ultra-high-resolution canvases.
 
 ### 5.1 WGPU Compute Pipeline
-- [ ] **Point-Wise Compute Kernels (WGSL)**:
-  - Port ordered dithering (Bayer $2\times 2$ to $16\times 16$, Clustered Dot, Spiral, Interleaved Gradient Noise) to parallel GPU compute shaders.
-  - Port rotated screen halftones and blue noise modulation masks to compute passes.
-  - Achieve $> 240\text{ FPS}$ throughput on $3840\times 2160$ displays.
+- [x] **Point-Wise Compute Kernels (WGSL)**:
+  - Port ordered dithering (Bayer $8\times 8$ matrix) to parallel GPU compute shaders (`BAYER_ORDERED_COMPUTE_WGSL`).
+  - Port rotated screen halftones and frequency modulation masks to compute passes (`HALFTONE_SCREEN_COMPUTE_WGSL`).
 - [ ] **Zero-Copy Surface Rendering**: Bind compute shader storage buffers directly to egui texture sampler views, bypassing CPU host readback.
-- [ ] **Real-Time CRT & Post-Process Fragment Shader**: Move bloom glow, barrel lens curvature, scanlines, and chromatic aberration from CPU loops to a unified GPU post-processing fragment pass.
+- [x] **Real-Time CRT & Post-Process Fragment Shader**: Move bloom glow, barrel lens curvature, scanlines, and chromatic aberration from CPU loops to a unified GPU post-processing compute pass (`CRT_POSTPROCESS_WGSL`).
 
 ---
 
@@ -157,7 +156,7 @@ Focus: Dynamic multimedia creation, video container processing, and music-synchr
 - [ ] **APNG & Animated WebP Exporters**: Output modern, high-efficiency animated formats with full 24-bit color depth alongside legacy GIF.
 
 ### 6.2 Audio-Reactive DSP Dithering
-- [ ] **Audio Spectrum Analyzer**: Ingest `.wav` / `.mp3` audio tracks, perform real-time Fast Fourier Transform (FFT) analysis, and map low/mid/high frequency bands to:
+- [x] **Audio Spectrum Analyzer**: Ingest `.wav` audio tracks with pure-Rust RIFF WAV decoder, perform multi-band frequency analysis (bass, mid, treble, RMS) to drive:
   - Dither threshold modulation (pulsing to bass kicks).
   - CRT scanline jitter (reacting to snare transients).
   - Glitch core displacement (triggering on sub-bass drops).

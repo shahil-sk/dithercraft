@@ -10,6 +10,7 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 pub mod algorithms;
+pub mod audio;
 pub mod buffer;
 pub mod color;
 pub mod color_depth;
@@ -22,6 +23,7 @@ pub mod temporal;
 pub mod vector;
 
 pub use algorithms::*;
+pub use audio::{AudioSpectrum, AudioTrack};
 pub use buffer::ImageBuffer;
 pub use color::{LabColor, OklabColor, RgbColor};
 pub use color_depth::{LuminosityMapping, MismatchMode};
@@ -30,4 +32,7 @@ pub use error::DitherError;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykHalftone, PopTone};
 pub use temporal::{AnimatedFrame, AnimationSequence, Interpolation, Keyframe, LfoModulator, LfoWaveform, TemporalNoisePattern, TimelineTrack};
-pub use vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, ToolpathStroke, rdp_simplify};
+pub use vector::{
+    BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, ToolpathStroke, export_smooth_bezier_svg,
+    fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
+};
