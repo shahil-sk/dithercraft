@@ -12,11 +12,14 @@
 
 <br>
 
-[Specification](SPEC.md) •
-[Roadmap](ROADMAP.md) •
-[Workflow](WORKFLOW.md) •
-[Rules](RULES.md) •
-[Deployment](DEPLOYMENT.md)
+[Specification](docs/spec.md) •
+[Roadmap](docs/roadmap.md) •
+[Parity](docs/parity.md) •
+[Shaper](docs/shaper.md) •
+[Gaps](docs/gaps.md) •
+[Workflow](docs/workflow.md) •
+[Rules](docs/rules.md) •
+[Deployment](docs/deployment.md)
 
 </div>
 
@@ -90,8 +93,12 @@ cargo xtask stats
 
 ## 4. Engineering Standards
 
-- [`SPEC.md`](SPEC.md) — Clean-room mathematical & functional specification (63 algorithms, 9 temporal CRT/LCD noise patterns, JPEG Glitch Core, 5 themes)
-- [`ROADMAP.md`](ROADMAP.md) — Phased milestone execution roadmap
-- [`RULES.md`](RULES.md) — Engineering invariants & Ponytail mode guidelines
-- [`WORKFLOW.md`](WORKFLOW.md) — Development lifecycle & Conventional Commits
-- [`DEPLOYMENT.md`](DEPLOYMENT.md) — Multi-platform packaging matrix
+- [`docs/spec.md`](docs/spec.md) — Clean-room mathematical & functional specification (63 algorithms, 9 temporal CRT/LCD noise patterns, JPEG Glitch Core, 5 themes)
+- [`docs/roadmap.md`](docs/roadmap.md) — Phased milestone execution roadmap
+- [`docs/parity.md`](docs/parity.md) — Clean-room literature & reference parity matrix
+- [`docs/shaper.md`](docs/shaper.md) — Vector contour isolation & SVG plotter exporter
+- [`docs/gaps.md`](docs/gaps.md) — Architectural boundary & capability gap analysis
+- [`docs/rules.md`](docs/rules.md) — Engineering invariants & Ponytail mode guidelines
+- [`docs/workflow.md`](docs/workflow.md) — Development lifecycle & Conventional Commits
+- [`docs/deployment.md`](docs/deployment.md) — Multi-platform packaging matrix
+- [`docs/versioning.md`](docs/versioning.md) — Semantic versioning and release lifecycle

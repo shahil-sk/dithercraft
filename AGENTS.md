@@ -9,7 +9,7 @@ Inspired by [VectorCraft](https://github.com/storytold/vectorcraft), the project
 ## 1. Autonomous Operation Protocol
 
 Follow this protocol for every session and task:
-1. **Orient**: Consult knowledge graph MCP tools (`code-review-graph`, `codebase-memory-mcp`) and read [`ROADMAP.md`](ROADMAP.md) / [`SPEC.md`](SPEC.md).
+1. **Orient**: Consult knowledge graph MCP tools (`code-review-graph`, `codebase-memory-mcp`) and read [`docs/roadmap.md`](docs/roadmap.md) / [`docs/spec.md`](docs/spec.md).
 2. **Plan (Ponytail Default)**: Channel a lazy senior developer. Select the first rung that holds:
    - Does this need to exist? (YAGNI) $\to$ Reuse existing code $\to$ `std` $\to$ Native UI $\to$ Installed crates $\to$ One line $\to$ Shortest working diff.
 3. **Implement**: Decouple math from presentation. Everything is a command.
