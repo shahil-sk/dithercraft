@@ -60,7 +60,7 @@ Focus: Eliminate all potential panic paths, resource exhaustion risks, and GUI t
 - [x] **Safe Codec Decoders**: Implement strict allocation limits (`max_alloc`) on `image` decoders to prevent zip-bomb or decompression bomb exploits on malformed headers.
 
 ### 1.3 Property Testing, Fuzzing & Diagnostic Logging
-- [ ] **Algorithm Fuzzing Suite**: Setup `cargo-fuzz` and `proptest` targets verifying zero panics across all 63 algorithms on:
+- [x] **Algorithm Fuzzing Suite**: Setup `proptest` targets verifying zero panics across all 63 algorithms on:
   - Empty image buffers ($0\times 0$, $1\times 1$).
   - Ultra-wide aspect ratios ($32768\times 1$).
   - Extreme dynamic ranges and single-color images (all `#000000`, all `#FFFFFF`).
@@ -101,14 +101,14 @@ Focus: Elevate daily user workflow to parity with professional design workstatio
   - Continuous zoom centered on cursor from $5\%$ to $3200\%$ with integer pixel-snap toggle.
 - [x] **Pixel Grid Overlay**: Crisp 1-pixel hairline grid rendered automatically at zoom levels $\ge 800\%$ for precision subpixel inspection.
 - [x] **Floating Viewport HUD**: Quick-access controls for 1:1 scale, Fit-to-screen, zoom percentage, and grid toggling.
-- [ ] **Multi-Mode Split View**:
+- [x] **Multi-Mode Split View**:
   - Horizontal & Vertical split comparison slider.
   - Checkerboard A/B comparison.
   - Difference Heatmap mode highlighting exact delta pixels between source and dithered output.
 
 ### 3.2 Studio History & Presets
-- [ ] **Infinite Undo / Redo (`Ctrl+Z` / `Ctrl+Shift+Z`)**: Command-pattern undo stack capturing algorithm changes, palette selections, post-effect parameters, and crop adjustments.
-- [ ] **Preset Management System (`.dcpreset`)**:
+- [x] **Infinite Undo / Redo (`Ctrl+Z` / `Ctrl+Shift+Z`)**: Command-pattern undo stack capturing algorithm changes, palette selections, post-effect parameters, and crop adjustments.
+- [x] **Preset Management System (`.dcpreset`)**:
   - One-click export and import of complete workstation configurations (algorithm + custom palette + CRT parameters + temporal noise settings).
   - Bundled user preset library with categories: *Game Boy Vintage*, *Cyberpunk Neon*, *1980s VHS*, *Thermal Camera*, *Newspaper Halftone*.
 - [ ] **Drag-and-Drop Batch Processing Queue**:
@@ -122,13 +122,13 @@ Focus: Elevate daily user workflow to parity with professional design workstatio
 Focus: Transform DitherCraft into the premier vector pre-processor for pen plotters, laser cutters, vinyl cutting, and screen printing.
 
 ### 4.1 Contour Simplification & Curve Fitting
-- [ ] **Ramer-Douglas-Peucker (RDP) Simplification**: Reduce collinear SVG line points by $70\text{--}90\%$ while preserving sharp corners, featuring a real-time tolerance slider ($\epsilon$).
+- [x] **Ramer-Douglas-Peucker (RDP) Simplification**: Reduce collinear SVG line points by $70\text{--}90\%$ while preserving sharp corners, featuring a real-time tolerance slider ($\epsilon$).
 - [ ] **Visvalingam-Whyatt Area-Based Simplification**: Alternative curve simplifier preserving subtle organic contours without creating angular artifacts.
 - [ ] **Schneider's Cubic Bézier Fitting**: Fit piecewise cubic Bézier curves (`<path d="M... C...">`) over pixel stairsteps for ultra-smooth physical pen plotter strokes.
 
 ### 4.2 Multi-Color Separations & G-Code Toolpaths
-- [ ] **Color Separation Layers (SVG)**: Output multi-layer SVGs with one `<g id="color-name">` per palette swatch, tailored for multi-pen AxiDraw plotters and multi-screen silkscreen printing.
-- [ ] **Direct G-Code Exporter**:
+- [x] **Color Separation Layers (SVG)**: Output multi-layer SVGs with one `<g id="color-name">` per palette swatch, tailored for multi-pen AxiDraw plotters and multi-screen silkscreen printing.
+- [x] **Direct G-Code Exporter**:
   - Generate clean G-code (`G00` pen up / travel, `G01` pen down / cut) with configurable feed rates, spindle speed / laser power, and pen-lift delays.
   - **Traveling Salesperson (TSP) Toolpath Optimization**: Nearest-neighbor path sorting minimizing rapid pen-up travel distance by up to $60\%$.
 

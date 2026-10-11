@@ -1,8 +1,9 @@
 use crate::buffer::ImageBuffer;
 use crate::error::DitherError;
+use serde::{Deserialize, Serialize};
 
 /// The 5 sub-modes of the JPEG Glitch Core.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JpegSubMode {
     BlockShift,
     ChannelSwap,

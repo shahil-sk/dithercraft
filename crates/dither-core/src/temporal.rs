@@ -1,9 +1,10 @@
 use crate::buffer::ImageBuffer;
 use crate::error::DitherError;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// 9 CRT and LCD Temporal Noise Patterns for multi-frame video and animation simulation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TemporalNoisePattern {
     CrtScanBeamJitter,
     PhosphorGrainHum,

@@ -7,11 +7,12 @@ use dither_core::{
     effects::*,
     palette::{ColorMetric, Palette},
     temporal::TemporalNoisePattern,
-    vector::BlackVectorIsolation,
+    vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation},
 };
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::{AnimationDecoder, Frame, RgbaImage};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -76,6 +77,214 @@ impl StudioTheme {
     }
 }
 
+/// Viewport comparison mode between source image and dithered output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SplitViewMode {
+    #[default]
+    Vertical,
+    Horizontal,
+    Checkerboard,
+    Difference,
+}
+
+impl SplitViewMode {
+    pub const ALL: [Self; 4] = [Self::Vertical, Self::Horizontal, Self::Checkerboard, Self::Difference];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Vertical => "Vertical Split",
+            Self::Horizontal => "Horizontal Split",
+            Self::Checkerboard => "Checkerboard A/B",
+            Self::Difference => "Difference Heatmap",
+        }
+    }
+}
+
+/// Workstation snapshot capturing complete algorithm, palette, and effects configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StudioPreset {
+    pub name: String,
+    pub algo: String,
+    pub palette_name: String,
+    pub metric: ColorMetric,
+    pub tonal_cycle_step: usize,
+
+    pub glow_enabled: bool,
+    pub glow_threshold: u8,
+    pub glow_radius: usize,
+    pub glow_intensity: f32,
+
+    pub chromatic_enabled: bool,
+    pub chromatic_shift: i32,
+    pub chromatic_radial: bool,
+
+    pub glitch_enabled: bool,
+    pub glitch_mode: JpegSubMode,
+    pub glitch_intensity: f32,
+
+    pub crt_enabled: bool,
+    pub crt_scanline: f32,
+    pub crt_barrel: f32,
+    pub crt_vignette: f32,
+
+    pub blur_enabled: bool,
+    pub blur_sigma: f32,
+
+    pub sharpen_enabled: bool,
+    pub sharpen_amount: f32,
+
+    pub temporal_enabled: bool,
+    pub temporal_pattern: TemporalNoisePattern,
+    pub temporal_intensity: f32,
+}
+
+impl StudioPreset {
+    pub fn bundled_presets() -> Vec<StudioPreset> {
+        vec![
+            StudioPreset {
+                name: "Game Boy Nostalgia".into(),
+                algo: "Floyd-Steinberg".into(),
+                palette_name: "Game Boy".into(),
+                metric: ColorMetric::Redmean,
+                tonal_cycle_step: 0,
+                glow_enabled: false,
+                glow_threshold: 180,
+                glow_radius: 4,
+                glow_intensity: 0.8,
+                chromatic_enabled: false,
+                chromatic_shift: 0,
+                chromatic_radial: false,
+                glitch_enabled: false,
+                glitch_mode: JpegSubMode::BlockShift,
+                glitch_intensity: 0.4,
+                crt_enabled: true,
+                crt_scanline: 0.20,
+                crt_barrel: 0.05,
+                crt_vignette: 0.25,
+                blur_enabled: false,
+                blur_sigma: 1.0,
+                sharpen_enabled: false,
+                sharpen_amount: 0.8,
+                temporal_enabled: false,
+                temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
+                temporal_intensity: 0.5,
+            },
+            StudioPreset {
+                name: "Cyberpunk Neon".into(),
+                algo: "Stucki".into(),
+                palette_name: "Cyberpunk".into(),
+                metric: ColorMetric::Oklab,
+                tonal_cycle_step: 0,
+                glow_enabled: true,
+                glow_threshold: 160,
+                glow_radius: 6,
+                glow_intensity: 0.9,
+                chromatic_enabled: true,
+                chromatic_shift: 4,
+                chromatic_radial: true,
+                glitch_enabled: false,
+                glitch_mode: JpegSubMode::BlockShift,
+                glitch_intensity: 0.4,
+                crt_enabled: false,
+                crt_scanline: 0.0,
+                crt_barrel: 0.0,
+                crt_vignette: 0.0,
+                blur_enabled: false,
+                blur_sigma: 1.0,
+                sharpen_enabled: true,
+                sharpen_amount: 1.0,
+                temporal_enabled: false,
+                temporal_pattern: TemporalNoisePattern::PhosphorGrainHum,
+                temporal_intensity: 0.5,
+            },
+            StudioPreset {
+                name: "1980s VHS Broadcast".into(),
+                algo: "Atkinson".into(),
+                palette_name: "Commodore 64".into(),
+                metric: ColorMetric::Ciede2000,
+                tonal_cycle_step: 0,
+                glow_enabled: false,
+                glow_threshold: 180,
+                glow_radius: 4,
+                glow_intensity: 0.8,
+                chromatic_enabled: true,
+                chromatic_shift: 3,
+                chromatic_radial: false,
+                glitch_enabled: false,
+                glitch_mode: JpegSubMode::BlockShift,
+                glitch_intensity: 0.4,
+                crt_enabled: true,
+                crt_scanline: 0.35,
+                crt_barrel: 0.10,
+                crt_vignette: 0.40,
+                blur_enabled: false,
+                blur_sigma: 1.0,
+                sharpen_enabled: false,
+                sharpen_amount: 0.8,
+                temporal_enabled: true,
+                temporal_pattern: TemporalNoisePattern::VhsTapePhaseNoise,
+                temporal_intensity: 0.40,
+            },
+            StudioPreset {
+                name: "Newspaper Halftone".into(),
+                algo: "Bayer 8x8".into(),
+                palette_name: "Monochrome".into(),
+                metric: ColorMetric::Oklab,
+                tonal_cycle_step: 0,
+                glow_enabled: false,
+                glow_threshold: 180,
+                glow_radius: 4,
+                glow_intensity: 0.8,
+                chromatic_enabled: false,
+                chromatic_shift: 0,
+                chromatic_radial: false,
+                glitch_enabled: false,
+                glitch_mode: JpegSubMode::BlockShift,
+                glitch_intensity: 0.4,
+                crt_enabled: false,
+                crt_scanline: 0.0,
+                crt_barrel: 0.0,
+                crt_vignette: 0.0,
+                blur_enabled: false,
+                blur_sigma: 1.0,
+                sharpen_enabled: true,
+                sharpen_amount: 1.2,
+                temporal_enabled: false,
+                temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
+                temporal_intensity: 0.5,
+            },
+            StudioPreset {
+                name: "Macintosh 1984 Classic".into(),
+                algo: "Floyd-Steinberg".into(),
+                palette_name: "Macintosh 1-bit".into(),
+                metric: ColorMetric::EuclideanRgb,
+                tonal_cycle_step: 0,
+                glow_enabled: false,
+                glow_threshold: 180,
+                glow_radius: 4,
+                glow_intensity: 0.8,
+                chromatic_enabled: false,
+                chromatic_shift: 0,
+                chromatic_radial: false,
+                glitch_enabled: false,
+                glitch_mode: JpegSubMode::BlockShift,
+                glitch_intensity: 0.4,
+                crt_enabled: true,
+                crt_scanline: 0.15,
+                crt_barrel: 0.04,
+                crt_vignette: 0.20,
+                blur_enabled: false,
+                blur_sigma: 1.0,
+                sharpen_enabled: false,
+                sharpen_amount: 0.8,
+                temporal_enabled: false,
+                temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
+                temporal_intensity: 0.5,
+            },
+        ]
+    }
+}
+
 struct RenderJobResult {
     buffer: ImageBuffer,
     duration_ms: f64,
@@ -134,7 +343,9 @@ pub struct DitherCraftApp {
 
     // Viewport Split-View
     split_view_enabled: bool,
+    split_mode: SplitViewMode,
     split_position: f32,
+    split_checker_tile_size: usize,
 
     // Timeline Editor & Transport
     is_playing: bool,
@@ -158,6 +369,10 @@ pub struct DitherCraftApp {
 
     // Swatch utilization statistics
     swatch_percentages: Vec<f32>,
+
+    // Command History & Undo/Redo
+    undo_stack: Vec<StudioPreset>,
+    redo_stack: Vec<StudioPreset>,
 
     // Threading, cancellation & UI wakeups
     render_generation: Arc<AtomicU64>,
@@ -243,7 +458,9 @@ impl DitherCraftApp {
             render_latency_ms: 0.0,
 
             split_view_enabled: false,
+            split_mode: SplitViewMode::default(),
             split_position: 0.5,
+            split_checker_tile_size: 32,
 
             is_playing: false,
             target_fps: 30,
@@ -261,11 +478,131 @@ impl DitherCraftApp {
 
             swatch_percentages: Vec::new(),
 
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+
             render_generation,
             egui_ctx,
             tx,
             rx,
             is_rendering: false,
+        }
+    }
+
+    pub fn capture_preset(&self, name: impl Into<String>) -> StudioPreset {
+        StudioPreset {
+            name: name.into(),
+            algo: self.selected_algo.clone(),
+            palette_name: self.selected_palette_name.clone(),
+            metric: self.active_palette.metric,
+            tonal_cycle_step: self.tonal_cycle_step,
+
+            glow_enabled: self.glow_enabled,
+            glow_threshold: self.glow_threshold,
+            glow_radius: self.glow_radius,
+            glow_intensity: self.glow_intensity,
+
+            chromatic_enabled: self.chromatic_enabled,
+            chromatic_shift: self.chromatic_shift,
+            chromatic_radial: self.chromatic_radial,
+
+            glitch_enabled: self.glitch_enabled,
+            glitch_mode: self.glitch_mode,
+            glitch_intensity: self.glitch_intensity,
+
+            crt_enabled: self.crt_enabled,
+            crt_scanline: self.crt_scanline,
+            crt_barrel: self.crt_barrel,
+            crt_vignette: self.crt_vignette,
+
+            blur_enabled: self.blur_enabled,
+            blur_sigma: self.blur_sigma,
+
+            sharpen_enabled: self.sharpen_enabled,
+            sharpen_amount: self.sharpen_amount,
+
+            temporal_enabled: self.temporal_noise_enabled,
+            temporal_pattern: self.temporal_pattern,
+            temporal_intensity: self.temporal_intensity,
+        }
+    }
+
+    pub fn apply_preset(&mut self, preset: &StudioPreset) {
+        self.selected_algo = preset.algo.clone();
+        self.selected_palette_name = preset.palette_name.clone();
+        self.tonal_cycle_step = preset.tonal_cycle_step;
+
+        let mut pal = match preset.palette_name.as_str() {
+            "Monochrome" => Palette::monochrome(),
+            "Macintosh 1-bit" => Palette::mac_1bit(),
+            "CGA Mode 1" => Palette::cga_mode_1(),
+            "Cyberpunk" => Palette::cyberpunk(),
+            "Apple II" => Palette::apple_ii(),
+            "Commodore 64" => Palette::commodore_64(),
+            "NES" => Palette::nes(),
+            "PICO-8" => Palette::pico_8(),
+            _ => Palette::game_boy(),
+        };
+        pal.metric = preset.metric;
+        self.active_palette = pal;
+
+        self.glow_enabled = preset.glow_enabled;
+        self.glow_threshold = preset.glow_threshold;
+        self.glow_radius = preset.glow_radius;
+        self.glow_intensity = preset.glow_intensity;
+
+        self.chromatic_enabled = preset.chromatic_enabled;
+        self.chromatic_shift = preset.chromatic_shift;
+        self.chromatic_radial = preset.chromatic_radial;
+
+        self.glitch_enabled = preset.glitch_enabled;
+        self.glitch_mode = preset.glitch_mode;
+        self.glitch_intensity = preset.glitch_intensity;
+
+        self.crt_enabled = preset.crt_enabled;
+        self.crt_scanline = preset.crt_scanline;
+        self.crt_barrel = preset.crt_barrel;
+        self.crt_vignette = preset.crt_vignette;
+
+        self.blur_enabled = preset.blur_enabled;
+        self.blur_sigma = preset.blur_sigma;
+
+        self.sharpen_enabled = preset.sharpen_enabled;
+        self.sharpen_amount = preset.sharpen_amount;
+
+        self.temporal_noise_enabled = preset.temporal_enabled;
+        self.temporal_pattern = preset.temporal_pattern;
+        self.temporal_intensity = preset.temporal_intensity;
+
+        self.trigger_render();
+    }
+
+    pub fn record_undo_state(&mut self) {
+        let snapshot = self.capture_preset("Snapshot");
+        if self.undo_stack.last() != Some(&snapshot) {
+            if self.undo_stack.len() >= 30 {
+                self.undo_stack.remove(0);
+            }
+            self.undo_stack.push(snapshot);
+            self.redo_stack.clear();
+        }
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(prev) = self.undo_stack.pop() {
+            let current = self.capture_preset("Current");
+            self.redo_stack.push(current);
+            self.apply_preset(&prev);
+            self.status_text = format!("Undo: restored {}", prev.algo);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            let current = self.capture_preset("Current");
+            self.undo_stack.push(current);
+            self.apply_preset(&next);
+            self.status_text = format!("Redo: restored {}", next.algo);
         }
     }
 
@@ -400,33 +737,65 @@ impl DitherCraftApp {
                 && src.height == res.height
             {
                 let split_x = (res.width as f32 * self.split_position).clamp(0.0, res.width as f32) as usize;
+                let split_y = (res.height as f32 * self.split_position).clamp(0.0, res.height as f32) as usize;
+                let tile = self.split_checker_tile_size.max(4);
+
                 for y in 0..height {
                     for x in 0..width {
                         let idx = (y * width + x) * 3;
-                        if x == split_x {
-                            color_data.push(255);
-                            color_data.push(255);
-                            color_data.push(255);
-                            color_data.push(255);
-                        } else if x < split_x {
-                            color_data.push(src.data[idx]);
-                            color_data.push(src.data[idx + 1]);
-                            color_data.push(src.data[idx + 2]);
-                            color_data.push(255);
-                        } else {
-                            color_data.push(res.data[idx]);
-                            color_data.push(res.data[idx + 1]);
-                            color_data.push(res.data[idx + 2]);
-                            color_data.push(255);
+                        match self.split_mode {
+                            SplitViewMode::Vertical => {
+                                if x == split_x {
+                                    color_data.extend_from_slice(&[255, 255, 255, 255]);
+                                } else if x < split_x {
+                                    color_data.extend_from_slice(&[src.data[idx], src.data[idx + 1], src.data[idx + 2], 255]);
+                                } else {
+                                    color_data.extend_from_slice(&[res.data[idx], res.data[idx + 1], res.data[idx + 2], 255]);
+                                }
+                            }
+                            SplitViewMode::Horizontal => {
+                                if y == split_y {
+                                    color_data.extend_from_slice(&[255, 255, 255, 255]);
+                                } else if y < split_y {
+                                    color_data.extend_from_slice(&[src.data[idx], src.data[idx + 1], src.data[idx + 2], 255]);
+                                } else {
+                                    color_data.extend_from_slice(&[res.data[idx], res.data[idx + 1], res.data[idx + 2], 255]);
+                                }
+                            }
+                            SplitViewMode::Checkerboard => {
+                                let check = ((x / tile) + (y / tile)) & 1 == 0;
+                                if check {
+                                    color_data.extend_from_slice(&[src.data[idx], src.data[idx + 1], src.data[idx + 2], 255]);
+                                } else {
+                                    color_data.extend_from_slice(&[res.data[idx], res.data[idx + 1], res.data[idx + 2], 255]);
+                                }
+                            }
+                            SplitViewMode::Difference => {
+                                let dr = (src.data[idx] as i32 - res.data[idx] as i32).abs();
+                                let dg = (src.data[idx + 1] as i32 - res.data[idx + 1] as i32).abs();
+                                let db = (src.data[idx + 2] as i32 - res.data[idx + 2] as i32).abs();
+                                let max_d = (dr.max(dg).max(db) as f32 / 255.0).clamp(0.0, 1.0);
+                                let (hr, hg, hb) = if max_d < 0.25 {
+                                    let t = max_d / 0.25;
+                                    (0, (t * 128.0) as u8, (t * 255.0) as u8)
+                                } else if max_d < 0.5 {
+                                    let t = (max_d - 0.25) / 0.25;
+                                    (0, (128.0 + t * 127.0) as u8, 255)
+                                } else if max_d < 0.75 {
+                                    let t = (max_d - 0.5) / 0.25;
+                                    ((t * 255.0) as u8, 255, (255.0 * (1.0 - t)) as u8)
+                                } else {
+                                    let t = (max_d - 0.75) / 0.25;
+                                    (255, (255.0 * (1.0 - t * 0.5)) as u8, (t * 255.0) as u8)
+                                };
+                                color_data.extend_from_slice(&[hr, hg, hb, 255]);
+                            }
                         }
                     }
                 }
             } else {
                 for chunk in res.data.chunks_exact(3) {
-                    color_data.push(chunk[0]);
-                    color_data.push(chunk[1]);
-                    color_data.push(chunk[2]);
-                    color_data.push(255);
+                    color_data.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
                 }
             }
 
@@ -458,6 +827,17 @@ impl eframe::App for DitherCraftApp {
 
         // Apply theme
         self.theme.apply(ctx);
+
+        // Handle Undo / Redo keyboard shortcuts
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z)) {
+            if ctx.input(|i| i.modifiers.shift) {
+                self.redo();
+            } else {
+                self.undo();
+            }
+        } else if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Y)) {
+            self.redo();
+        }
 
         // Top Menu Bar
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
@@ -653,6 +1033,37 @@ impl eframe::App for DitherCraftApp {
                             let isolator = BlackVectorIsolation::default();
                             if let Ok(svg) = isolator.trace_to_svg(img) {
                                 let _ = std::fs::write(path, svg);
+                                self.status_text = "Exported black vector SVG".into();
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Export Multi-Color SVG...").clicked() {
+                        let save_target = self
+                            .rendered_image
+                            .as_ref()
+                            .and_then(|img| rfd::FileDialog::new().add_filter("Layered SVG", &["svg"]).save_file().map(|path| (img, path)));
+                        if let Some((img, path)) = save_target {
+                            let separator = MultiColorSvgSeparation::default();
+                            if let Ok(svg) = separator.trace_palette_layers(img, &self.active_palette) {
+                                let _ = std::fs::write(path, svg);
+                                self.status_text = "Exported multi-color SVG layers".into();
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Export CNC / Plotter G-Code...").clicked() {
+                        let save_target = self
+                            .rendered_image
+                            .as_ref()
+                            .and_then(|img| rfd::FileDialog::new().add_filter("CNC G-Code", &["gcode", "nc"]).save_file().map(|path| (img, path)));
+                        if let Some((img, path)) = save_target {
+                            let config = GCodeConfig::default();
+                            if let Ok(gcode) = GCodeExporter::generate_gcode(img, &config) {
+                                let _ = std::fs::write(path, gcode);
+                                self.status_text = "Exported plotter G-code with TSP sorting".into();
                             }
                         }
                         ui.close_menu();
@@ -689,6 +1100,51 @@ impl eframe::App for DitherCraftApp {
                             self.selected_palette_name = "Extracted K-Means".into();
                             self.active_palette = pal;
                             self.trigger_render();
+                        }
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Edit", |ui| {
+                    if ui.button("Undo (Ctrl+Z)").clicked() {
+                        self.undo();
+                        ui.close_menu();
+                    }
+                    if ui.button("Redo (Ctrl+Shift+Z)").clicked() {
+                        self.redo();
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Presets", |ui| {
+                    ui.label("Curated Profiles:");
+                    for p in StudioPreset::bundled_presets() {
+                        if ui.button(&p.name).clicked() {
+                            self.record_undo_state();
+                            self.apply_preset(&p);
+                            self.status_text = format!("Loaded preset: {}", p.name);
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Import Preset (.dcpreset)...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("DitherCraft Preset", &["dcpreset", "json"]).pick_file()
+                            && let Ok(data) = std::fs::read_to_string(path)
+                            && let Ok(preset) = serde_json::from_str::<StudioPreset>(&data)
+                        {
+                            self.record_undo_state();
+                            self.apply_preset(&preset);
+                            self.status_text = format!("Imported preset: {}", preset.name);
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Export Active Preset...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("DitherCraft Preset", &["dcpreset", "json"]).save_file() {
+                            let preset = self.capture_preset("Exported Preset");
+                            if let Ok(json) = serde_json::to_string_pretty(&preset) {
+                                let _ = std::fs::write(path, json);
+                                self.status_text = "Preset saved".into();
+                            }
                         }
                         ui.close_menu();
                     }
@@ -1012,6 +1468,7 @@ impl eframe::App for DitherCraftApp {
             ui.checkbox(&mut self.fine_wheel_increment, "Fine Wheel Increment");
 
             if changed {
+                self.record_undo_state();
                 self.trigger_render();
             }
         });
@@ -1142,11 +1599,33 @@ impl eframe::App for DitherCraftApp {
             ui.horizontal(|ui| {
                 // Split View controls
                 let mut split_changed = false;
-                if ui.checkbox(&mut self.split_view_enabled, "Split View (Before / After)").changed() {
+                if ui.checkbox(&mut self.split_view_enabled, "Compare View").changed() {
                     split_changed = true;
                 }
-                if self.split_view_enabled && ui.add(egui::Slider::new(&mut self.split_position, 0.0..=1.0).text("Split")).changed() {
-                    split_changed = true;
+                if self.split_view_enabled {
+                    egui::ComboBox::from_id_salt("split_view_mode_combo").selected_text(self.split_mode.label()).show_ui(ui, |ui| {
+                        for m in SplitViewMode::ALL {
+                            if ui.selectable_value(&mut self.split_mode, m, m.label()).clicked() {
+                                split_changed = true;
+                            }
+                        }
+                    });
+
+                    match self.split_mode {
+                        SplitViewMode::Vertical | SplitViewMode::Horizontal => {
+                            if ui.add(egui::Slider::new(&mut self.split_position, 0.0..=1.0).text("Position")).changed() {
+                                split_changed = true;
+                            }
+                        }
+                        SplitViewMode::Checkerboard => {
+                            if ui.add(egui::Slider::new(&mut self.split_checker_tile_size, 8..=128).text("Tile Size")).changed() {
+                                split_changed = true;
+                            }
+                        }
+                        SplitViewMode::Difference => {
+                            ui.label("Heatmap: Black=0, Blue=Low, Red=High Δ");
+                        }
+                    }
                 }
                 if split_changed {
                     self.update_texture(ctx);

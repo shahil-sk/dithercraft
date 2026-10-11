@@ -420,3 +420,64 @@ fn test_ciede2000_color_distance_and_perceptual_metric() {
     let nearest = pal.find_nearest_with_metric(&RgbColor::new(200, 10, 10), ColorMetric::Ciede2000);
     assert_eq!(nearest, RgbColor::new(255, 0, 0));
 }
+
+#[test]
+fn test_rdp_polyline_simplification() {
+    use dither_core::vector::{Point2D, rdp_simplify};
+
+    // Collinear points along a straight line: should reduce to endpoints
+    let straight_line = vec![Point2D::new(0.0, 0.0), Point2D::new(1.0, 1.0), Point2D::new(2.0, 2.0), Point2D::new(3.0, 3.0), Point2D::new(4.0, 4.0)];
+    let simplified = rdp_simplify(&straight_line, 0.1);
+    assert_eq!(simplified.len(), 2);
+    assert_eq!(simplified[0], Point2D::new(0.0, 0.0));
+    assert_eq!(simplified[1], Point2D::new(4.0, 4.0));
+
+    // Sharp corner in middle: must preserve corner
+    let corner = vec![Point2D::new(0.0, 0.0), Point2D::new(2.0, 2.0), Point2D::new(4.0, 0.0)];
+    let preserved = rdp_simplify(&corner, 0.5);
+    assert_eq!(preserved.len(), 3);
+}
+
+#[test]
+fn test_multicolor_svg_layer_separation() {
+    use dither_core::vector::MultiColorSvgSeparation;
+
+    let mut buf = ImageBuffer::new(4, 4).expect("buf");
+    // Draw top half red, bottom half blue
+    for x in 0..4 {
+        buf.set_pixel(x, 0, RgbColor::new(255, 0, 0));
+        buf.set_pixel(x, 1, RgbColor::new(255, 0, 0));
+        buf.set_pixel(x, 2, RgbColor::new(0, 0, 255));
+        buf.set_pixel(x, 3, RgbColor::new(0, 0, 255));
+    }
+
+    let pal = Palette::new("RedBlue", vec![RgbColor::new(255, 0, 0), RgbColor::new(0, 0, 255)]).expect("pal");
+    let exporter = MultiColorSvgSeparation::default();
+    let svg = exporter.trace_palette_layers(&buf, &pal).expect("svg");
+
+    assert!(svg.contains("<svg"));
+    assert!(svg.contains("</svg>"));
+    assert!(svg.contains(r##"fill="#FF0000""##));
+    assert!(svg.contains(r##"fill="#0000FF""##));
+}
+
+#[test]
+fn test_gcode_toolpath_generation_and_optimization() {
+    use dither_core::vector::{GCodeConfig, GCodeExporter};
+
+    let mut buf = ImageBuffer::new(8, 8).expect("buf");
+    // Draw 2 horizontal black bars
+    for x in 1..7 {
+        buf.set_pixel(x, 2, RgbColor::new(0, 0, 0));
+        buf.set_pixel(x, 5, RgbColor::new(0, 0, 0));
+    }
+
+    let config = GCodeConfig::default();
+    let gcode = GCodeExporter::generate_gcode(&buf, &config).expect("gcode");
+
+    assert!(gcode.contains("G21 ; Units: mm"));
+    assert!(gcode.contains("G90 ; Absolute positioning"));
+    assert!(gcode.contains("G00 Z"));
+    assert!(gcode.contains("G01 Z"));
+    assert!(gcode.contains("M02 ; End of program"));
+}

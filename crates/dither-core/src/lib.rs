@@ -17,6 +17,7 @@ pub mod effects;
 pub mod error;
 pub mod palette;
 pub mod renderers;
+pub mod shaders;
 pub mod temporal;
 pub mod vector;
 
@@ -29,4 +30,4 @@ pub use error::DitherError;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykHalftone, PopTone};
 pub use temporal::{AnimatedFrame, AnimationSequence, Interpolation, Keyframe, LfoModulator, LfoWaveform, TemporalNoisePattern, TimelineTrack};
-pub use vector::BlackVectorIsolation;
+pub use vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, ToolpathStroke, rdp_simplify};

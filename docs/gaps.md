@@ -19,9 +19,12 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
 ## 2. Identified Gaps & Future Opportunity Vectors
 
 ### 2.1 GPU Compute Acceleration (WGSL)
-- **Current Status**: All 63 algorithms execute via Rayon multi-threaded CPU parallel iterations. On 1080p RGB buffers, latency is typically $<10\text{ms}$ for ordered/halftone/bitmap algorithms and $\sim 15\text{--}35\text{ms}$ for serial serpentine diffusion.
-- **Identified Gap**: At $4\text{K}$ ($3840\times 2160$) or $8\text{K}$ resolutions, serpentine error diffusion becomes CPU cache-bound.
-- **Next Frontier**: Implement optional WGSL compute shaders executing directly on the WGPU hardware backend for point-wise ordered, halftone, and modulation algorithms.
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented standalone WebGPU Shading Language (WGSL) compute kernels in `dither_core::shaders`:
+    - `BAYER_ORDERED_COMPUTE_WGSL`: 16×16 workgroup compute kernel executing 8×8 Bayer ordered matrix thresholding against storage buffer palettes.
+    - `HALFTONE_SCREEN_COMPUTE_WGSL`: Compute kernel calculating rotated screen coordinate grids and frequency-modulated dot matrices.
+    - `CRT_POSTPROCESS_WGSL`: Unified compute pass performing barrel curvature lens distortion, scanline sinusoidal modulation, chromatic aberration pixel displacement, and vignette shading.
+  - Zero external GUI/graphics crate coupling maintained within `crates/dither-core`.
 
 ### 2.2 Direct Video Codec Container Demuxing (MP4 / WebM)
 - **Current Status**: The multi-frame engine supports animated GIF files and frame sequences natively without external C libraries.
@@ -29,14 +32,22 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
 - **Next Frontier**: Integrate a zero-system-dependency pure-Rust demuxer/decoder (or optional feature-gated `ffmpeg-sys`) for streaming direct video tracks through the dither pipeline.
 
 ### 2.3 Advanced Perceptual Color Spaces (CIEDE2000 & OKLab)
-- **Current Status**: DitherCraft supports Euclidean RGB, Perceptual Redmean, and CIELAB 1976 $\Delta E^*_{ab}$.
-- **Identified Gap**: CIELAB 1976 exhibits minor blue-to-purple hue shifts at high saturations.
-- **Next Frontier**: Add OKLab and CIEDE2000 perceptual color distance options to `ColorMetric`.
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Integrated Björn Ottosson's **OKLab** perceptual color space (`OklabColor`), eliminating the blue-to-purple hue distortion of CIELAB 1976.
+  - Implemented the complete ISO/CIE standard **CIEDE2000** ($\Delta E_{00}$) equation with hue rotation terms ($R_T$) and parametric compensation factors ($k_L, k_C, k_H$).
+  - Added `ColorMetric::Oklab` and `ColorMetric::Ciede2000` to `dither-core` and the desktop UI picker.
 
 ### 2.4 Vector Shaper Curve Smoothing & Douglas-Peucker Simplification
-- **Current Status**: `BlackVectorIsolation` extracts exact rectilinear pixel contour boundaries into optimized SVG path segments.
-- **Identified Gap**: High-resolution raster images produce SVG paths with numerous small collinear line segments.
-- **Next Frontier**: Integrate a Ramer-Douglas-Peucker (RDP) polygon simplifier and Bézier curve fitting to generate compact, smooth curved paths for CNC pen plotters and vinyl cutters.
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented `rdp_simplify` (**Ramer-Douglas-Peucker**) polyline simplification on `Point2D` geometries, eliminating collinear line points while preserving sharp contour features.
+  - Implemented `MultiColorSvgSeparation`: Multi-layer SVG separation exporting dedicated `<g id="color-..." fill="...">` layers per palette swatch for pen plotters (AxiDraw) and screen printing.
+  - Implemented `GCodeExporter`: Direct CNC / plotter toolpath generator featuring Traveling Salesperson (TSP) nearest-neighbor path sorting to minimize rapid pen-up travel time.
+
+### 2.5 Studio Presets & Command History
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Added `StudioPreset` serialization supporting one-click import and export of workstation configurations (`.dcpreset` / `.json`).
+  - Bundled 5 curated workstation profiles: *Game Boy Nostalgia*, *Cyberpunk Neon*, *1980s VHS Broadcast*, *Newspaper Halftone*, *Macintosh 1984 Classic*.
+  - Added command history undo/redo stack with keyboard accelerators (`Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+Y`).
 
 ---
 
