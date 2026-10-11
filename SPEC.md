@@ -1,16 +1,16 @@
 # DitherCraft (Rust) — Clean-Room System Specification (SPEC.md)
 
 **Document Version:** 2.1.0  
-**Project:** DitherCraft — Pure Rust Clean-Room Rewrite  
+**Project:** DitherCraft — Pure Rust Clean-Room Implementation  
 **Target Reference:** Clean-Room Implementation of Dither Boy Architecture  
-**Language & Edition:** Pure Rust (2021/2024 Edition)  
+**Language & Edition:** Pure Rust (2024 Edition)  
 **Classification:** Clean-Room Architecture & Functional Specification  
 
 ---
 
 ## 1. Executive Summary & Clean-Room Directive
 
-**DitherCraft** is an open-source, studio-grade desktop workstation and DSP engine for retro graphical dithering, vintage CRT simulations, and creative glitch effects, undergoing a **full clean-room rewrite in Pure Rust**.
+**DitherCraft** is an open-source, studio-grade desktop workstation and DSP engine for retro graphical dithering, vintage CRT simulations, and creative glitch effects, built in **Pure Rust**.
 
 Inspired by [VectorCraft](https://github.com/storytold/vectorcraft) and [Dither Boy](https://studioaaa.com/product/dither-boy/), the project adheres to strict clean-room engineering, no-panic reliability, command-driven architecture, and automated multi-platform delivery.
 
@@ -26,32 +26,27 @@ The system is architected as a modular Cargo workspace:
 ```text
 dithercraft/
 ├── Cargo.toml                  # Workspace root
+├── apps/
+│   ├── dithercraft/            # Hardware-accelerated desktop application (egui/eframe/wgpu)
+│   │   └── src/main.rs         # 60+ FPS preview, 5 studio themes, non-blocking workers
+│   └── dithercraft-cli/        # Headless batch & streaming CLI + benchmarks
+│       └── src/main.rs         # Subcommands: single, svg, bench
 ├── crates/
-│   ├── dither-core/            # Pure DSP & dithering math (no GUI, no windowing)
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   ├── algorithms/     # 63 algorithms across 6 categories
-│   │   │   ├── renderers/      # CMYK Halftone, Pop Tone, Floyd-Steinberg
-│   │   │   ├── color_depth/    # Luminosity mapping & Mismatch mode
-│   │   │   ├── palette/        # Extraction, Swatch locking/random, Tonal cycling
-│   │   │   ├── effects/        # Stackable post-effects & JPEG Glitch Core
-│   │   │   ├── vector/         # Black vector isolation & SVG path tracing
-│   │   │   ├── matrices.rs     # Bayer, Halftone, Blue Noise arrays
-│   │   │   └── temporal.rs     # 9 CRT/LCD temporal noise patterns
-│   │   └── benches/            # Criterion micro-benchmarks
-│   ├── dither-cli/             # Headless batch & pipe CLI + MCP server
-│   │   └── src/main.rs
-│   └── dither-gui/             # Hardware-accelerated desktop application
+│   └── dither-core/            # Pure DSP & dithering math (no GUI, no windowing)
 │       ├── src/
-│       │   ├── main.rs
-│       │   ├── app.rs          # eframe / egui application state & 5 themes
-│       │   ├── canvas.rs       # Zoom/pan preview viewport (wgpu / texture)
-│       │   ├── timeline.rs     # Multi-frame video timeline & scrubber
-│       │   ├── panels/         # Searchable dropdowns, controls, effect stack
-│       │   └── worker.rs       # Background Rayon worker thread pool
-│       └── assets/             # Icons, default bundled presets
-├── presets/                    # Bundled retro JSON palettes & matrices
-└── docs/                       # Architecture & user manuals
+│       │   ├── lib.rs
+│       │   ├── algorithms/     # 63 algorithms across 6 categories
+│       │   ├── renderers/      # CMYK Halftone, Pop Tone, Floyd-Steinberg
+│       │   ├── color_depth/    # Luminosity mapping & Mismatch mode
+│       │   ├── palette.rs      # Extraction, Swatch locking/random, Tonal cycling
+│       │   ├── effects/        # Stackable post-effects & JPEG Glitch Core
+│       │   ├── vector/         # Black vector isolation & SVG path tracing
+│       │   └── temporal.rs     # 9 CRT/LCD temporal noise patterns
+│       └── tests/              # Core verification suite
+├── packaging/                  # Multi-platform installers (MSI, DMG, Deb, RPM, Flatpak)
+├── xtask/                      # Cargo automation: layering, stats, bundle, brand checks
+├── assets/                     # App icons, vector assets, fonts
+└── presets/                    # Bundled retro JSON palettes & settings
 ```
 
 ---

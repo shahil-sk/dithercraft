@@ -1,11 +1,11 @@
-# DitherCraft (Rust) — Roadmap to Clean-Room Parity (ROADMAP.md)
+# DitherCraft (Rust) — Engineering Roadmap (ROADMAP.md)
 
-This roadmap details the engineering phases for executing a clean-room rewrite of DitherCraft in Pure Rust to achieve studio-grade parity with Dither Boy, adhering to strict clean-room engineering, no-panic reliability, command-driven architecture, and non-blocking performance.
+This roadmap details the engineering phases for the clean-room implementation of DitherCraft in Pure Rust, adhering to strict clean-room engineering, no-panic reliability, command-driven architecture, and non-blocking performance.
 
 ---
 
 ## Phase 1: Cargo Workspace & Processing Core (`crates/dither-core`)
-- [ ] Initialize Cargo workspace (`crates/dither-core`, `crates/dither-cli`, `crates/dither-gui`).
+- [x] Configure Cargo workspace (`crates/dither-core`, `apps/dithercraft-cli`, `apps/dithercraft`, `xtask`).
 - [ ] Core image abstractions: zero-copy `ImageBuffer`, `RgbColor`, `Palette`, and `DitherAlgorithm` trait.
 - [ ] **Implement 63 Algorithms across 6 Mathematical Categories**:
   - [ ] **Error-Diffusion (16 algorithms)**:
@@ -82,7 +82,7 @@ This roadmap details the engineering phases for executing a clean-room rewrite o
 
 ---
 
-## Phase 5: Hardware-Accelerated Native GUI (`crates/dither-gui`)
+## Phase 5: Hardware-Accelerated Native GUI (`apps/dithercraft`)
 - [ ] Native cross-platform desktop UI using `egui` and `eframe` (WGPU hardware-accelerated backend).
 - [ ] **Interactive Viewport**:
   - [ ] Hardware-accelerated canvas with nearest-neighbor crisp pixel scaling, smooth panning, $<16\text{ms}$ redraws.
@@ -103,7 +103,7 @@ This roadmap details the engineering phases for executing a clean-room rewrite o
 
 ---
 
-## Phase 6: Headless CLI, Batch Processing & Production Automation (`crates/dither-cli`)
+## Phase 6: Headless CLI, Batch Processing & Production Automation (`apps/dithercraft-cli`)
 - [ ] High-throughput CLI interface powered by `clap` with subcommands:
   - `dither single <input> <output> --algo <algo> --palette <palette>`
   - `dither batch <input_dir> <output_dir> --threads <n>`

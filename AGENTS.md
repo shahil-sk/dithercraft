@@ -1,6 +1,6 @@
 # DitherCraft (Rust) — Instructions for AI Agents
 
-**DitherCraft** is a clean-room, open-source, studio-grade desktop workstation and DSP engine for retro graphical dithering and vintage CRT effects, undergoing a **full rewrite in Pure Rust**.
+**DitherCraft** is a clean-room, open-source, studio-grade desktop workstation and DSP engine for retro graphical dithering and vintage CRT effects, built in **Pure Rust**.
 
 Inspired by [VectorCraft](https://github.com/storytold/vectorcraft), the project adheres to strict clean-room engineering, no-panic reliability, command-driven architecture, and automated multi-platform delivery.
 

@@ -3,11 +3,11 @@
 ## 1. Ponytail Mode (MANDATORY — DEFAULT ACTIVE)
 - Lazy senior developer mode active by default. Shortest working diff, YAGNI, standard library first.
 
-## 2. Architecture: Pure Rust Rewrite
-- Clean-room rewrite in Pure Rust targeting studio-grade Dither Boy parity.
+## 2. Architecture: Pure Rust Implementation
+- Clean-room implementation in Pure Rust targeting studio-grade retro workstation capabilities.
 - `crates/dither-core`: Pure DSP dithering math, palettes, CRT filters.
-- `crates/dither-gui`: Native hardware-accelerated desktop UI (`egui` / `eframe`).
-- `crates/dither-cli`: Headless streaming CLI.
+- `apps/dithercraft`: Native hardware-accelerated desktop UI (`egui` / `eframe`).
+- `apps/dithercraft-cli`: Headless streaming and batch CLI.
 
 ## 3. Knowledge Graph MCP First
 - Use `code-review-graph` and `codebase-memory-mcp` (project: `mnt-5893accc-4b16-4de7-b2a7-6333530b2614-PROJECTS-21_Active-dithercraft`) before Grep/Glob.

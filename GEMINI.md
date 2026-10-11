@@ -14,10 +14,10 @@
 
 ---
 
-## 2. Target Architecture: Pure Rust Rewrite
+## 2. Architecture: Pure Rust Implementation
 - **`crates/dither-core`**: Pure DSP library for dithering algorithms (Floyd-Steinberg, Atkinson, Bayer, Riemersma), color quantization, and CRT filters. Decoupled from GUI.
-- **`crates/dither-gui`**: Native desktop UI (`egui`/`eframe`), 60+ FPS live preview, non-blocking Rayon worker threads.
-- **`crates/dither-cli`**: Headless streaming CLI.
+- **`apps/dithercraft`**: Native desktop UI (`egui`/`eframe`), 60+ FPS live preview, non-blocking Rayon worker threads.
+- **`apps/dithercraft-cli`**: Headless streaming and batch CLI.
 
 ---
 
