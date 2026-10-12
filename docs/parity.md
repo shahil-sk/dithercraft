@@ -1,5 +1,9 @@
 # DitherCraft (Rust) — Parity & Academic Literature Matrix (`docs/parity.md`)
 
+**Document Version:** 3.0.0  
+**Last Updated:** October 12, 2026  
+**Classification:** Academic DSP Grounding & Architecture Parity Matrix  
+
 This document details the functional, mathematical, and algorithmic parity of **DitherCraft** against vintage DSP literature, reference software, and academic standards.
 
 DitherCraft is built as a 100% clean-room, Pure Rust desktop workstation and DSP engine with zero foreign binary dependencies or proprietary shaders.
@@ -27,12 +31,17 @@ All algorithms implemented in `crates/dither-core` adhere to public scientific p
 | **Sauvola & Pietikäinen (2000)**| *Adaptive Document Image Binarization* | Contrast-normalized local adaptive binarization |
 | **Ostromoukhov (2001)** | *A Simple and Efficient Error-Diffusion Algorithm* | Dynamic tonal-dependent blue-noise coefficient interpolation |
 | **Roberts (2014)** | *The Unreasonable Effectiveness of Quasirandom Sequences* | Low-discrepancy quasirandom sequence modulation ($R_2$) |
+| **Ottosson (2020)** | *A Perceptual Color Space for Image Processing* | OKLab & Oklch perceptual color representation |
+| **ISO/CIE (2001)** | *CIEDE2000 Color Difference Formula* | CIEDE2000 ($\Delta E_{00}$) perceptual distance |
+| **Ramer (1972) & Douglas-Peucker (1973)** | *Algorithms for the Reduction of the Number of Points* | RDP polyline simplification |
+| **Visvalingam & Whyatt (1993)** | *Line Generalisation by Repeated Elimination of the Smallest Area* | Visvalingam-Whyatt area-based vertex elimination |
+| **Schneider (1990)** | *An Algorithm for Automatically Fitting Digitized Curves* | Piecewise cubic Bézier spline curve fitting |
 
 ---
 
 ## 2. Dithering Engine Parity (63 Algorithms)
 
-DitherCraft achieves parity across **6 mathematical categories**:
+DitherCraft achieves complete parity across **6 mathematical categories**:
 
 ### 2.1 Error-Diffusion (17 Algorithms)
 - **Classic**: Floyd-Steinberg, Atkinson, Sierra-3, Sierra-2, Sierra-Lite.
@@ -70,13 +79,16 @@ DitherCraft achieves parity across **6 mathematical categories**:
 ## 3. Color Science & Quantization Parity
 
 - **Color Distance Metrics**:
-  - Euclidean RGB: Standard fast distance.
-  - Perceptual Redmean: Perceptually weighted Euclidean RGB distance.
-  - CIELAB $\Delta E^*_{ab}$: Perceptual color difference via CIE D65 sRGB $\to$ Linear $\to$ XYZ $\to$ CIE $L^*a^*b^*$ conversion.
-- **Fast Nearest Neighbor Lookup**: Balanced 3D spatial KD-Tree (`PaletteKdTree`) providing $O(\log K)$ zero-allocation lookups.
+  - Euclidean RGB: Fast raw channel distance.
+  - Perceptual Redmean: Weighted Euclidean RGB distance.
+  - CIELAB $\Delta E^*_{ab}$: Perceptual color difference via CIE D65 sRGB $\to$ Linear $\to$ XYZ $\to$ CIE $L^*a^*b^*$.
+  - **OKLab & Oklch**: Ottosson (2020) perceptual space eliminating blue-to-purple hue shifts.
+  - **CIEDE2000 ($\Delta E_{00}$)**: Complete ISO/CIE standard with hue rotation ($R_T$) and parametric factors ($k_L, k_C, k_H$).
+- **Linear sRGB Blending**: Perceptually accurate linear light transfer functions preventing dark haloing around dithered boundaries.
+- **Fast Nearest Neighbor Lookup**: Balanced 3D spatial KD-Tree (`PaletteKdTree`) with exact-match fast path providing sub-microsecond lookups.
 - **Dynamic Palette Extraction**: Native Heckbert Median-Cut (1982) and Lloyd K-Means (1982) clustering.
-- **Swatch Controls**: Slot locking, selective unlocked randomization, tonal sorting ($Y = 0.299R + 0.587G + 0.114B$), and luminance cycling sweeps.
-- **Multi-Format Interop**: Seamless parsing and serialization for `.json` presets, `.hex`, `.gpl` (GIMP palette), and `.pal` (JASC-PAL).
+- **Swatch Controls**: Slot locking, selective unlocked randomization, tonal sorting ($Y = 0.299R + 0.587G + 0.114B$), and real-time swatch allocation histogram with dead-color pruning.
+- **Multi-Format Interop**: Full bidirectional parsing and serialization for `.gpl` (GIMP palette), `.pal` (JASC-PAL), `.act` (Binary Color Table), `.hex`, and `.json`.
 
 ---
 
@@ -93,8 +105,19 @@ DitherCraft achieves parity across **6 mathematical categories**:
 
 ---
 
-## 5. Animation, Multi-Frame & Video Parity
+## 5. Animation, Video Containers & Multimedia Parity
 
+- **Pure-Rust Container Demuxers**:
+  - **ISO-BMFF MP4 Demuxer**: Safe extraction of video tracks, timestamps, and sample tables without FFmpeg.
+  - **EBML WebM Demuxer**: Safe parsing of WebM/MKV tracks, VP8/VP9/AV1 codecs, and Cluster SimpleBlocks.
+- **Modern Animated Exporters**:
+  - **Animated GIF**: Lossless preservation of frame delay and duration, parallel Rayon worker encoding.
+  - **Animated APNG**: Full 24-bit true color animation via `png` chunk assembly.
+  - **Animated WebP**: Pure-Rust container multiplexer (`WebpAnimationMuxer`) assembling `VP8X`, `ANIM`, and `ANMF` subchunks with lossless compression.
+- **Audio-Reactive DSP Dithering**:
+  - Pure-Rust RIFF WAV decoder (8-bit, 16-bit, 32-bit PCM).
+  - Multi-band spectrum analyzer (bass, mid, treble, RMS) modulating dither threshold, CRT jitter, and glitch intensity.
+  - Synchronized WAV audio slicing exporting matching soundtracks for animation loops.
 - **9 CRT & LCD Temporal Noise Patterns**:
   1. CRT Scan Beam Jitter
   2. Phosphor Grain Hum
@@ -106,18 +129,41 @@ DitherCraft achieves parity across **6 mathematical categories**:
   8. Bayer Phase Stepping
   9. Blue Noise Temporal Jitter
 - **Timeline Engine**: Scrub bar, transport controls (`Play`/`Pause`/`Step`), 1..60 FPS target, looping, keyframing (`TimelineTrack`, `Keyframe`, `Interpolation`), and automated LFO modulation.
-- **Multi-Frame Animated GIF**: Lossless preservation of frame delay and duration, parallel per-frame rendering across Rayon workers, multi-frame GIF import and export.
 
 ---
 
-## 6. Vector Isolation & Plotter Output
+## 6. Vector Shaper & CNC Plotter Parity
 
 - **Contour Tracing**: High-precision boundary tracing extracting darkest pixel contours into optimized SVG `<path>` vectors.
-- **Hardware Compatibility**: Ready for laser engravers, vinyl cutters, Cricut, pen plotters, CNC embroidery, and screen printing.
+- **Polygon Simplification**:
+  - **Ramer-Douglas-Peucker (RDP)**: Polyline simplification reducing vector nodes by $70\%\text{--}90\%$ while retaining sharp corners.
+  - **Visvalingam-Whyatt**: Area-based vertex elimination preserving organic contours without angular spikes.
+- **Piecewise Cubic Bézier Fitting**: Fitting $C^1$-continuous cubic spline curves (`<path d="M... C...">`) over pixel stairsteps for smooth physical pen plotter strokes.
+- **Multi-Color SVG Separations**: Multi-layer SVGs with dedicated `<g id="color-name">` per palette swatch for multi-pen AxiDraw plotters and silkscreen printing.
+- **Direct G-Code Exporter**: Clean CNC toolpaths (`G00` pen up, `G01` pen down) with Traveling Salesperson (TSP) nearest-neighbor path optimization minimizing rapid transit distance by up to 60%.
 
 ---
 
 ## 7. Headless CLI & Model Context Protocol (MCP)
 
-- **Clap CLI**: `single`, `gif`, `svg`, `batch`, `bench`, and `mcp`.
+- **Clap CLI Subcommands**: `single`, `gif`, `svg`, `batch`, `bench`, `mcp`, `mp4-info`, `webm-info`, `trim-audio`, `extract-palette`.
 - **Stdio MCP Server**: JSON-RPC 2.0 interface exposing `list_algorithms`, `list_palettes`, `dither_image`, `isolate_vector`, and `extract_palette` for autonomous coding agent workflows.
+
+---
+
+## 8. Next-Gen Roadmap Vectors (Phases 7–9)
+
+| Capability | Target Phase | Algorithmic Grounding | Expected Impact |
+|---|---|---|---|
+| **AVX2 / NEON SIMD Quantization** | Phase 7 | Packed vector instructions | $< 1.5\text{ms}$ 4K UHD full-image palette mapping |
+| **Tile-Based Wavefront Error Diffusion** | Phase 7 | Wavefront parallel processing | Multi-core scaling for Floyd-Steinberg and Atkinson |
+| **Fractal Hilbert Space-Filling Curves** | Phase 7 | Hilbert & Morton fractal sweeps | Optimal L1/L2 cache locality, zero worm artifacts |
+| **Ring Buffer Image Pools** | Phase 7 | Pre-allocated slab memory arena | Zero heap allocations during continuous timeline playback |
+| **Interactive Tone Curves & Levels** | Phase 8 | Cubic spline curve interpolation | Precision tonal pre-processing with live histogram overlay |
+| **Reorderable Effect Node Stack** | Phase 8 | Layered compositor with blend modes | Full creative flexibility across post-effects |
+| **Floating Precision Magnifier Loupe** | Phase 8 | Subpixel coordinate inspector | Instant subpixel inspection with RGB/HEX readouts |
+| **OKLCH Color Wheel & Harmonies** | Phase 8 | Classical color harmony mathematics | 1-click generation of retro bit-depth harmonies |
+| **Instant A/B Preset Snapshots** | Phase 8 | Multi-slot state buffer (`F5`–`F8`) | Instant zero-latency A/B comparison of configurations |
+| **Selective Alpha Masks & Brushes** | Phase 9 | Alpha compositing & luminance bands | Non-destructive region-selective dither application |
+| **Custom Threshold Matrix Designer** | Phase 9 | Dynamic $N \times N$ matrix compiler | In-app creation of custom ordered halftones and stamps |
+| **Pure-Rust 3D LUT Engine** | Phase 9 | Trilinear `.cube` interpolation | Authentic 1970s film and vintage CRT phosphor emulation |

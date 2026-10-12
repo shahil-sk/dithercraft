@@ -16,8 +16,8 @@ Version format: `MAJOR.MINOR.PATCH`
 The version is declared once at the Cargo workspace root in [`Cargo.toml`](file:///mnt/5893accc-4b16-4de7-b2a7-6333530b2614/PROJECTS/21_Active/dithercraft/Cargo.toml) under `[workspace.package]`:
 ```toml
 [workspace.package]
-version = "6.0.0-alpha.1"
-edition = "2021"
+version = "0.9.0"
+edition = "2024"
 ```
 All sub-crates inherit this version:
 ```toml
@@ -30,8 +30,8 @@ version.workspace = true
 
 ## 2. Git Branching Strategy
 
-- **`master`**: Production-ready, deployable release branch. All commits must pass CI checks (cargo test, clippy, fmt).
-- **Topic Branches (`feat/*`, `fix/*`, `perf/*`)**: Isolated work branches merged into `master` via pull requests or verified squashed commits.
+- **`main`**: Production-ready, deployable release branch. All commits must pass CI checks (cargo test, clippy, fmt, xtask ci).
+- **Topic Branches (`feat/*`, `fix/*`, `perf/*`)**: Isolated work branches merged into `main` via pull requests or verified squashed commits.
 
 ---
 

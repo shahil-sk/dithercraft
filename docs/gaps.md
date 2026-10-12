@@ -106,7 +106,83 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
 
 ---
 
-## 3. Reliability & Zero-Panic Assurance
+## 3. Active Next-Gen Capability & Performance Vectors (Phases 7–9)
+
+### 3.1 SIMD Vectorized Color Distance Acceleration (Phase 7)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Accelerate the per-pixel palette quantization inner loop using packed AVX2 (x86_64) and NEON (AArch64) vector instructions.
+- **Specification**: Vectorize batch Euclidean and OKLab distance equations to evaluate 8 or 16 pixels against active palette color swatches in parallel vector lanes with zero branch divergence.
+- **Success Metric**: Latency $< 1.5\text{ms}$ for full 4K UHD ($3840\times 2160$) image quantization.
+
+### 3.2 Tile-Based Parallel Wavefront Error Diffusion (Phase 7)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Overcome the serial scanline bottleneck of classical error diffusion (Floyd-Steinberg, Atkinson, Stucki, JJN).
+- **Specification**: Partition large frames into diagonal wavefront tiles ($x + y = k$), scheduling non-overlapping tiles across Rayon thread pools concurrently.
+- **Success Metric**: $> 1\text{ Gigapixel/sec}$ aggregate batch throughput across multi-core processors.
+
+### 3.3 Cache-Oblivious Fractal Space-Filling Scan Curves (Phase 7)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Eliminate directional worming artifacts and maximize CPU L1/L2 data cache hit rates.
+- **Specification**: Implement recursive Hilbert curve and Morton (Z-Order) curve traversals for error diffusion and Riemersma algorithms.
+- **Success Metric**: Complete elimination of horizontal sweep asymmetry and measurable reduction in cache misses.
+
+### 3.4 Zero-Allocation Ring Buffers & Image Pools (Phase 7)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Eliminate heap allocator lock contention during multi-frame scrubbing and live video playback.
+- **Specification**: Implement `ImageBufferPool` pre-allocating slab memory buffers reused across animation frames.
+- **Success Metric**: Zero heap allocations (`malloc`/`free`) during continuous timeline playback.
+
+### 3.5 Interactive Dual-Tone Curves & Levels Histogram Tool (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Studio-grade tonal manipulation prior to discrete quantization.
+- **Specification**: Cubic spline curve editor for Master Luminance, R, G, B with real-time pre-dither histogram distribution and draggable Black/Mid/White points.
+- **Success Metric**: Real-time $< 1\text{ms}$ curve remapping with interactive visual feedback.
+
+### 3.6 Reorderable Downstream Effects Stack (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Flexible layer-based post-processing architecture.
+- **Specification**: Drag-and-drop layer reordering for Bloom, Chromatic Aberration, Glitch Core, CRT, Blur, and Sharpen with per-layer blend modes (Multiply, Screen, Overlay) and bypass toggles.
+- **Success Metric**: Interactive drag-and-drop reordering with instantaneous canvas updates.
+
+### 3.7 Floating Precision Magnifier Loupe & Subpixel Inspector (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Precision inspection of subpixel dithering structures and palette assignments.
+- **Specification**: Floating circular or square loupe ($400\%$, $800\%$, $1600\%$) tethered to the mouse cursor or pinned to viewport coordinates, displaying exact swatch indices, RGB triplets, and HEX codes.
+- **Success Metric**: 60 FPS smooth tracking without viewport latency degradation.
+
+### 3.8 OKLCH Color Wheel & Retro Harmony Generator (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Academic color harmony exploration mapped to retro color depth constraints.
+- **Specification**: Circular OKLCH / HSV color wheel in the Palette Drawer generating Complementary, Triadic, Analogous, and Tetradic harmonies remapped to discrete hardware bit depths (1-bit to 8-bit).
+- **Success Metric**: Instant harmony swatch generation with one-click canvas preview.
+
+### 3.9 Quick Snapshot A/B Preset Comparator (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Rapid A/B evaluation of competing algorithms and threshold parameters.
+- **Specification**: 4 memory snapshot slots (`F5`–`F8`) allowing artists to toggle between distinct workstation states without losing uncommitted adjustments.
+- **Success Metric**: Zero-latency instantaneous state toggling.
+
+### 3.10 Selective Spatial Dithering & Alpha Masking (Phase 9)
+- **Target Milestone**: `v1.1.0`
+- **Objective**: Non-destructive region-selective and luminance-band dithering.
+- **Specification**: Paint-brush masks, gradient alpha masks, and luminance range thresholding (e.g., dither only dark shadows while keeping highlights smooth).
+- **Success Metric**: Seamless feathering and alpha composite blending between dithered textures and pristine source layers.
+
+### 3.11 Custom Threshold Matrix Designer (Phase 9)
+- **Target Milestone**: `v1.1.0`
+- **Objective**: Creative custom pattern generation for ordered dithering and halftones.
+- **Specification**: In-app $N \times N$ matrix workshop ($2\times 2$ to $16\times 16$) to draw, import, and test custom ordered dithering patterns, typography stamps, and logo halftones.
+- **Success Metric**: Dynamic compiler turning user matrices into zero-allocation threshold lookups.
+
+### 3.12 Pure-Rust 3D LUT Vintage Film Emulation (Phase 9)
+- **Target Milestone**: `v1.1.0`
+- **Objective**: Authentic vintage film and monitor phosphor color transformation.
+- **Specification**: Zero-dependency parser and trilinear interpolator for `.cube` (17×17×17, 33×33×33) 3D Look-Up Tables.
+- **Success Metric**: Bit-accurate trilinear interpolation running in $< 3\text{ms}$ on 1080p frames.
+
+---
+
+## 4. Reliability & Zero-Panic Assurance
 
 | Criterion | Current Implementation | Status |
 |---|---|---|
