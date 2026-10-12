@@ -151,19 +151,35 @@ DitherCraft achieves complete parity across **6 mathematical categories**:
 
 ---
 
-## 8. Next-Gen Roadmap Vectors (Phases 7–9)
+## 8. Next-Gen Roadmap Vectors (Phases 7–13)
 
-| Capability | Target Phase | Algorithmic Grounding | Expected Impact |
-|---|---|---|---|
-| **AVX2 / NEON SIMD Quantization** | Phase 7 | Packed vector instructions | $< 1.5\text{ms}$ 4K UHD full-image palette mapping |
-| **Tile-Based Wavefront Error Diffusion** | Phase 7 | Wavefront parallel processing | Multi-core scaling for Floyd-Steinberg and Atkinson |
-| **Fractal Hilbert Space-Filling Curves** | Phase 7 | Hilbert & Morton fractal sweeps | Optimal L1/L2 cache locality, zero worm artifacts |
-| **Ring Buffer Image Pools** | Phase 7 | Pre-allocated slab memory arena | Zero heap allocations during continuous timeline playback |
-| **Interactive Tone Curves & Levels** | Phase 8 | Cubic spline curve interpolation | Precision tonal pre-processing with live histogram overlay |
-| **Reorderable Effect Node Stack** | Phase 8 | Layered compositor with blend modes | Full creative flexibility across post-effects |
-| **Floating Precision Magnifier Loupe** | Phase 8 | Subpixel coordinate inspector | Instant subpixel inspection with RGB/HEX readouts |
-| **OKLCH Color Wheel & Harmonies** | Phase 8 | Classical color harmony mathematics | 1-click generation of retro bit-depth harmonies |
-| **Instant A/B Preset Snapshots** | Phase 8 | Multi-slot state buffer (`F5`–`F8`) | Instant zero-latency A/B comparison of configurations |
-| **Selective Alpha Masks & Brushes** | Phase 9 | Alpha compositing & luminance bands | Non-destructive region-selective dither application |
-| **Custom Threshold Matrix Designer** | Phase 9 | Dynamic $N \times N$ matrix compiler | In-app creation of custom ordered halftones and stamps |
-| **Pure-Rust 3D LUT Engine** | Phase 9 | Trilinear `.cube` interpolation | Authentic 1970s film and vintage CRT phosphor emulation |
+| Capability | Target Phase | Algorithmic Grounding | Expected Impact | Status |
+|---|---|---|---|---|
+| **Fractal Hilbert Space-Filling Curves** | Phase 7 | Hilbert fractal bijective mapping | Optimal L1/L2 cache locality, zero sweep asymmetry | **DELIVERED (`v0.9.5`)** |
+| **Ring Buffer Image Pools & LUT Levels** | Phase 7 | Pre-allocated arena & 256-LUT transfer | Zero heap allocations during timeline playback | **DELIVERED (`v0.9.5`)** |
+| **Floating Precision Magnifier Loupe** | Phase 8 | Subpixel coordinate inspector | Instant subpixel inspection with RGB/HEX readouts | **DELIVERED (`v0.9.5`)** |
+| **Instant A/B Preset Snapshots** | Phase 8 | Multi-slot state buffer (`F5`–`F8`) | Instant zero-latency A/B comparison of configurations | **DELIVERED (`v0.9.5`)** |
+| **Keyboard Shortcuts Cheatsheet Modal** | Phase 8 | In-app modal dialog (`?` / `F1`) | Complete ergonomic overview of hotkeys and tools | **DELIVERED (`v0.9.5`)** |
+| **AVX2 / NEON SIMD Quantization** | Phase 7 | Packed vector instructions | $< 1.5\text{ms}$ 4K UHD full-image palette mapping | Planned (`v1.0.0`) |
+| **Tile-Based Wavefront Error Diffusion** | Phase 7 | Wavefront parallel processing | Multi-core scaling for Floyd-Steinberg and Atkinson | Planned (`v1.0.0`) |
+| **Interactive Tone Curves & Levels** | Phase 8 | Cubic spline curve interpolation | Precision tonal pre-processing with live histogram overlay | Planned (`v1.0.0`) |
+| **Reorderable Effect Node Stack** | Phase 8 | Layered compositor with blend modes | Full creative flexibility across post-effects | Planned (`v1.0.0`) |
+| **OKLCH Color Wheel & Harmonies** | Phase 8 | Classical color harmony mathematics | 1-click generation of retro bit-depth harmonies | Planned (`v1.0.0`) |
+| **Visual Preset Browser Gallery** | Phase 8 | Multi-thumbnail live rendering | Side-by-side aesthetic comparison across all profiles | Planned (`v1.0.0`) |
+| **Canvas Rulers & Aspect Ratio Guides** | Phase 8 | Pixel alignment & retro display framing | Perfect retro composition (Game Boy, NES, CGA, CRT) | Planned (`v1.0.0`) |
+| **CVD Color Blindness Simulation** | Phase 8 | Machado (2009) & Brettel (1997) models | Accessibility & high-contrast print legibility auditing | Planned (`v1.0.0`) |
+| **Selective Alpha Masks & Brushes** | Phase 9 | Alpha compositing & luminance bands | Non-destructive region-selective dither application | Planned (`v1.1.0`) |
+| **Custom Threshold Matrix Designer** | Phase 9 | Dynamic $N \times N$ matrix compiler | In-app creation of custom ordered halftones and stamps | Planned (`v1.1.0`) |
+| **Pure-Rust 3D LUT Engine** | Phase 9 | Trilinear `.cube` interpolation | Authentic 1970s film and vintage CRT phosphor emulation | Planned (`v1.1.0`) |
+| **CMYK Rosette Halftone Angle Screens** | Phase 10 | Traditional offset rosette screening | Moiré-free offset print separations with dot gain | Planned (`v1.1.0`) |
+| **Spot Color Plates & Registration Targets**| Phase 10 | Screen printing positive plate export | Separation films with corner bullseyes and wedges | Planned (`v1.1.0`) |
+| **Plotter Arc Fitting (G02/G03) & Nib Offset**| Phase 10 | Circular curve fitting & stroke offsetting | 70% G-code reduction and ink bleed prevention | Planned (`v1.1.0`) |
+| **Geometric & Stippled Hatch Infill** | Phase 10 | Continuous vector boundary infills | Pen plotter shading and laser hatch toolpaths | Planned (`v1.1.0`) |
+| **Multi-Track Automation Timeline** | Phase 11 | Cubic Bézier parameter keyframing | Dynamic parameter animation for music videos | Planned (`v1.2.0`) |
+| **Temporal Coherence & Flicker Suppression**| Phase 11 | Motion-compensated inter-frame error | Smooth video sequences with zero noise swim | Planned (`v1.2.0`) |
+| **Animation Lightbox & Onion Skinning** | Phase 11 | Multi-frame rotoscope ghosting | Frame-by-frame pixel sprite refinement | Planned (`v1.2.0`) |
+| **Procedural Blue Noise Synthesizer** | Phase 12 | Ulichney (1993) Void & Cluster | Custom high-frequency blue noise without external assets | Planned (`v1.3.0`) |
+| **Reaction-Diffusion Dither Kernels** | Phase 12 | Gray-Scott (1984) morphogenetic PDEs | Biological, coral, and leopard spot dither aesthetics | Planned (`v1.3.0`) |
+| **Vector Flow Field Steered Dithering**| Phase 12 | 2D Perlin / Simplex curl noise flow | Topographic and woodgrain organic grain alignment | Planned (`v1.3.0`) |
+| **Browser WebAssembly Workstation** | Phase 13 | `wasm32-unknown-unknown` + WebGPU | Zero-install 100% private client-side web studio | Planned (`v1.4.0`) |
+| **Stable C/Rust DSP Plugin ABI** | Phase 13 | Dynamic library FFI (`dither_core_ffi`) | Extensible third-party community algorithm ecosystem | Planned (`v1.4.0`) |

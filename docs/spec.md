@@ -1,6 +1,6 @@
 # DitherCraft (Rust) — Clean-Room System Specification (SPEC.md)
 
-**Document Version:** 3.0.0  
+**Document Version:** 3.1.0  
 **Project:** DitherCraft — Pure Rust Clean-Room Implementation  
 **Target Reference:** Clean-Room Implementation of Dither Boy Architecture  
 **Language & Edition:** Pure Rust (2024 Edition)  
@@ -208,24 +208,48 @@ Downstream, layer-based effect stack executing after core dithering/quantization
 
 ---
 
-## 10. Next-Gen Roadmap Evolution Specifications (Phases 7–9)
+## 10. Next-Gen Roadmap Evolution Specifications (Phases 7–13)
 
 ### 10.1 Phase 7: Ultra-Performance Engine & SIMD Kernels
 - **AVX2 / NEON Batch Quantization**: SIMD batch distance calculation vectorizing Euclidean RGB and OKLab Euclidean distances (`L`, `a`, `b`), evaluating 8–16 pixels per register concurrently with zero branch divergence. Target: $< 1.5\text{ms}$ for full 4K UHD.
 - **Tile-Based Parallel Wavefront Error Diffusion**: Partition 4K/8K images into diagonal wavefront bands ($x + y = k$) or stepped tiles, breaking serial horizontal dependencies and unlocking multi-core Rayon acceleration for Floyd-Steinberg and Atkinson.
-- **Fractal Space-Filling Curves**: Hilbert and Morton (Z-Order) curve scanning passes as alternatives to traditional raster and serpentine sweeps, maximizing CPU L1/L2 cache locality and eliminating directional worm artifacts.
-- **Zero-Allocation Ring Buffers**: Pre-allocated memory arenas (`ImageBufferPool`) eliminating heap allocator lock contention during high-FPS timeline scrubbing and multi-threaded batch conversions.
+- **Fractal Space-Filling Curves [Delivered in v0.9.5]**: Recursive Hilbert space-filling curve generator (`HilbertCurve`) in `crates/dither-core/src/buffer.rs` with exact bidirectional bijective mapping (`d2xy` and `xy2d`) and ordered path visitation.
+- **Zero-Allocation Ring Buffers [Delivered in v0.9.5]**: Pre-allocated memory arena (`ImageBufferPool`) with `acquire` and `release` recycling buffers during animation scrubbing, alongside `ImageBuffer::adjust_levels(black_point, white_point, gamma)` 256-entry lookup table.
 
 ### 10.2 Phase 8: Studio-Grade Professional UI/UX & Creative Workstation
 - **Interactive Tone Curves & Levels Editor**: Cubic spline curves for Master Luminance, Red, Green, and Blue channels with real-time pre-dither histogram display and draggable Black/Mid/White points.
 - **Draggable & Reorderable Downstream Effects Stack**: Visual effect pipeline allowing drag-and-drop layer reordering (e.g., Bloom $\to$ Glitch $\to$ CRT vs. Glitch $\to$ CRT $\to$ Bloom), per-effect blend modes (Multiply, Screen, Overlay), and opacity sliders.
-- **Floating Precision Magnifier Loupe**: Cursor-tethered or pinned inspection loupe ($400\%$, $800\%$, $1600\%$) with subpixel RGB/HEX readouts.
-- **Color Harmony Generator & OKLCH Color Wheel**: Interactive circular color wheel with one-click harmonies (Complementary, Triadic, Analogous, Tetradic) mapped to retro bit-depth constraints.
-- **Instant A/B Preset Snapshot Comparator**: 4 quick snapshot memory slots (`F5`–`F8`) for instant comparison between different algorithm configurations without losing active edits.
-- **Studio Layout & Keyboard HUD**: Dockable/collapsible workspace layout with in-app shortcut cheatsheet (`?` / `F1`).
+- **Floating Precision Magnifier Loupe [Delivered in v0.9.5]**: Real-time cursor-tethered $9 \times 9$ subpixel inspection loupe displaying coordinates `(X, Y)`, `RGB(r, g, b)`, and `#RRGGBB` hex readout (hotkey `L`).
+- **Instant A/B Preset Snapshot Comparator [Delivered in v0.9.5]**: 4 quick snapshot memory slots (`F5`–`F8` recall, `Shift+F5`–`F8` store) for instantaneous comparison between different algorithm configurations.
+- **Studio Layout & Keyboard HUD [Delivered in v0.9.5]**: In-app keyboard shortcut cheatsheet modal dialog (`?` / `F1`) summarizing navigation controls, snapshot slots, and loupe toggles.
+- **Visual Preset Browser & Thumbnail Matrix**: Real-time multi-preset gallery rendering active canvas across all presets simultaneously in a responsive thumbnail matrix.
+- **Canvas Viewport Rulers & Alignment Guides**: Top and left edge pixel rulers, draggable guide lines with magnetic snapping, and retro framing guides (Game Boy 10:9, CGA 4:3, NES 8:7, Macintosh 4:3, Arcade 3:4).
+- **Canvas Geometry Workshop**: Non-destructive cropping with fixed aspect ratios, 90° rotations, axis flips, and integer pixel scaling ($1\times, 2\times, 4\times, 8\times$).
+- **Color Vision Deficiency (CVD) Simulation**: Perceptual simulation filters based on Machado et al. (2009) and Brettel et al. (1997) for Protanopia, Deuteranopia, Tritanopia, and Achromatopsia accessibility auditing.
 
 ### 10.3 Phase 9: Creative DSP, Generative Masks & Production
 - **Selective Dithering & Spatial Alpha Masking**: Paint-brush masks, gradient alpha masks, and luminance range thresholding (e.g., dither only dark shadows while keeping highlights smooth).
 - **Custom Threshold Matrix Designer**: Interactive in-app $N \times N$ matrix editor ($2\times 2$ to $16\times 16$) to draw, import, and test custom ordered dithering patterns and typography stamps.
 - **Pure-Rust 3D LUT Vintage Film Emulation**: Zero-dependency `.cube` 3D Look-Up Table parser and trilinear interpolator simulating 1970s instant film, vintage Technicolor, and arcade CRT phosphors.
 - **Production Batch Automation**: Multi-target simultaneous export (PNG, WebP, SVG, and WAV in one pass) with smart naming templates (`{stem}_{algo}_{palette}_{dims}_{timestamp}`).
+
+### 10.4 Phase 10: Advanced Printmaking & Physical Fabrication Studio
+- **CMYK Rosette Dot-Screen Angle Separations**: Traditional offset printing rosette screens with standard screen angles: Cyan (15°), Magenta (75°), Yellow (0°), and Black (45°) to prevent moiré interference. Configurable screen frequency (15–150 LPI), Euclidean round/elliptical/line dot geometries, and Yule-Nielsen dot gain compensation.
+- **Physical Spot Color Separations & Registration Target Generator**: Channel separation exporting individual positive films per palette swatch with automated corner crosshairs (`+`), center bullseyes, and density step-wedge calibration strips.
+- **Pen Plotter Arc Fitting (G02/G03) & Nib Offsetting**: Bi-directional stroke offsetting simulating actual pen nib widths ($0.1\text{mm}$ to $1.2\text{mm}$) and circular arc fitting converting dense polylines to native `G02`/`G03` commands ($70\%$ file size reduction).
+- **Geometric & Stippled Hatch Infill Patterns**: Multi-angle parallel line hatching, cross-hatching, concentric spiral infills, and Poisson-disk stippling for closed vector outlines.
+
+### 10.5 Phase 11: Non-Linear Video & Motion Graphics Suite
+- **Keyframed Parameter Automation Timeline**: Multi-track timeline supporting keyframes for algorithm morphing, CRT scanline jitter, barrel curvature, and glitch intensity with cubic Bézier easing curves.
+- **Inter-Frame Temporal Coherence & Flickering Suppression**: Motion-compensated inter-frame error propagation ($t \to t+1$) suppressing high-frequency noise and temporal flicker.
+- **Onion Skinning & Pixel Animation Auditing**: Multi-frame onion skinning displaying preceding (red tint) and succeeding (green/blue tint) frames with adjustable opacity.
+- **Temporal Frame Decimation & Vintage Refresh Emulation**: Variable cadence decimation simulating 60Hz NTSC, 50Hz PAL, 24fps cinema, 12fps anime, and 8fps stop-motion.
+
+### 10.6 Phase 12: Generative DSP & Procedural Texture Synthesis
+- **Procedural Blue Noise Void & Cluster Synthesizer**: Pure-Rust Void and Cluster algorithm (Ulichney 1993) synthesizing customized blue noise masks ($32\times 32$ to $512\times 512$) with optimal isotropic high-frequency energy.
+- **Reaction-Diffusion & Morphogenetic Dither Kernels**: Real-time Gray-Scott reaction-diffusion equations generating biological labyrinthine, coral, and leopard spot dither textures.
+- **Vector Flow Field Steered Dithering**: Directional error diffusion paths steered along continuous 2D vector flow fields generated via Perlin, Simplex, or curl gradient noise.
+
+### 10.7 Phase 13: WebAssembly Studio & Zero-Dependency Plugin API
+- **Serverless Browser-Native WebAssembly Workstation**: Native compilation to `wasm32-unknown-unknown` with WebGPU / WebGL2 shaders and WebAssembly SIMD (`wasm-simd128`), enabling 100% client-side privacy without remote servers.
+- **Stable C/Rust DSP Plugin ABI (`dither_core_ffi`)**: Stable C ABI definition allowing community developers to author custom dithering kernels and post-effects as native dynamic libraries or Wasm modules with hot-reload support.

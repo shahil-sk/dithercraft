@@ -104,9 +104,35 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
   - Added dedicated "View -> Pipeline Telemetry HUD" window displaying real-time stage performance alongside generation ID and engine state.
   - Integrated status bar hover tooltip showing instantaneous per-stage telemetry.
 
+### 2.16 Hilbert Fractal Space-Filling Scan Curves
+- **Current Status**: **RESOLVED** (`v0.9.5`).
+  - Implemented pure-Rust bidirectional `HilbertCurve` in `crates/dither-core/src/buffer.rs` with exact bijective mapping functions (`d2xy` and `xy2d`).
+  - Added `HilbertCurve::generate_order(width, height)` enabling fractal scanline traversal that maintains spatial locality, maximizes CPU L1/L2 cache efficiency, and completely eliminates horizontal sweep asymmetry.
+
+### 2.17 Reusable ImageBuffer Arena Pool & Pre-Dither LUT Tone Levels
+- **Current Status**: **RESOLVED** (`v0.9.5`).
+  - Implemented `ImageBufferPool` bounded memory arena in `crates/dither-core/src/buffer.rs` with `acquire` and `release` methods recycling image buffers during high-FPS timeline playback.
+  - Implemented `ImageBuffer::adjust_levels(black_point, white_point, gamma)` with a 256-element precomputed lookup table for zero-allocation pre-dither tone transfer.
+
+### 2.18 Instant A/B Preset Snapshot Comparator
+- **Current Status**: **RESOLVED** (`v0.9.5`).
+  - Implemented 4 instant preset snapshot slots (`[A]`, `[B]`, `[C]`, `[D]`) in `apps/dithercraft/src/main.rs`.
+  - Hotkeys: `F5`–`F8` recall snapshots with background Rayon rendering; `Shift + F5`–`F8` (or right-click) store the active workstation state.
+  - Accessible via top Presets menu, bottom status bar, and timeline panel.
+
+### 2.19 Floating Precision Magnifier Loupe & Subpixel Inspector
+- **Current Status**: **RESOLVED** (`v0.9.5`).
+  - Implemented interactive $9 \times 9$ subpixel magnifying HUD tethered to cursor in `apps/dithercraft/src/main.rs`.
+  - Real-time readout of pixel coordinates `(X, Y)`, `RGB(r, g, b)`, and `#RRGGBB` hex code.
+  - Toggled via `L` key, the floating Viewport HUD, and the View menu.
+
+### 2.20 Studio Keyboard Shortcuts Cheatsheet Modal
+- **Current Status**: **RESOLVED** (`v0.9.5`).
+  - Implemented structured keyboard shortcut cheatsheet modal dialog (`?` / `F1`) documenting canvas navigation, zoom shortcuts, A/B snapshots, and loupe hotkeys.
+
 ---
 
-## 3. Active Next-Gen Capability & Performance Vectors (Phases 7–9)
+## 3. Active Next-Gen Capability & Performance Vectors (Phases 7–13)
 
 ### 3.1 SIMD Vectorized Color Distance Acceleration (Phase 7)
 - **Target Milestone**: `v1.0.0`
@@ -120,47 +146,47 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
 - **Specification**: Partition large frames into diagonal wavefront tiles ($x + y = k$), scheduling non-overlapping tiles across Rayon thread pools concurrently.
 - **Success Metric**: $> 1\text{ Gigapixel/sec}$ aggregate batch throughput across multi-core processors.
 
-### 3.3 Cache-Oblivious Fractal Space-Filling Scan Curves (Phase 7)
-- **Target Milestone**: `v1.0.0`
-- **Objective**: Eliminate directional worming artifacts and maximize CPU L1/L2 data cache hit rates.
-- **Specification**: Implement recursive Hilbert curve and Morton (Z-Order) curve traversals for error diffusion and Riemersma algorithms.
-- **Success Metric**: Complete elimination of horizontal sweep asymmetry and measurable reduction in cache misses.
-
-### 3.4 Zero-Allocation Ring Buffers & Image Pools (Phase 7)
-- **Target Milestone**: `v1.0.0`
-- **Objective**: Eliminate heap allocator lock contention during multi-frame scrubbing and live video playback.
-- **Specification**: Implement `ImageBufferPool` pre-allocating slab memory buffers reused across animation frames.
-- **Success Metric**: Zero heap allocations (`malloc`/`free`) during continuous timeline playback.
-
-### 3.5 Interactive Dual-Tone Curves & Levels Histogram Tool (Phase 8)
+### 3.3 Interactive Dual-Tone Curves & Levels Histogram Tool (Phase 8)
 - **Target Milestone**: `v1.0.0`
 - **Objective**: Studio-grade tonal manipulation prior to discrete quantization.
 - **Specification**: Cubic spline curve editor for Master Luminance, R, G, B with real-time pre-dither histogram distribution and draggable Black/Mid/White points.
 - **Success Metric**: Real-time $< 1\text{ms}$ curve remapping with interactive visual feedback.
 
-### 3.6 Reorderable Downstream Effects Stack (Phase 8)
+### 3.4 Reorderable Downstream Effects Stack (Phase 8)
 - **Target Milestone**: `v1.0.0`
 - **Objective**: Flexible layer-based post-processing architecture.
 - **Specification**: Drag-and-drop layer reordering for Bloom, Chromatic Aberration, Glitch Core, CRT, Blur, and Sharpen with per-layer blend modes (Multiply, Screen, Overlay) and bypass toggles.
 - **Success Metric**: Interactive drag-and-drop reordering with instantaneous canvas updates.
 
-### 3.7 Floating Precision Magnifier Loupe & Subpixel Inspector (Phase 8)
-- **Target Milestone**: `v1.0.0`
-- **Objective**: Precision inspection of subpixel dithering structures and palette assignments.
-- **Specification**: Floating circular or square loupe ($400\%$, $800\%$, $1600\%$) tethered to the mouse cursor or pinned to viewport coordinates, displaying exact swatch indices, RGB triplets, and HEX codes.
-- **Success Metric**: 60 FPS smooth tracking without viewport latency degradation.
-
-### 3.8 OKLCH Color Wheel & Retro Harmony Generator (Phase 8)
+### 3.5 OKLCH Color Wheel & Retro Harmony Generator (Phase 8)
 - **Target Milestone**: `v1.0.0`
 - **Objective**: Academic color harmony exploration mapped to retro color depth constraints.
 - **Specification**: Circular OKLCH / HSV color wheel in the Palette Drawer generating Complementary, Triadic, Analogous, and Tetradic harmonies remapped to discrete hardware bit depths (1-bit to 8-bit).
 - **Success Metric**: Instant harmony swatch generation with one-click canvas preview.
 
-### 3.9 Quick Snapshot A/B Preset Comparator (Phase 8)
+### 3.6 Visual Preset Browser & Live Thumbnail Matrix (Phase 8)
 - **Target Milestone**: `v1.0.0`
-- **Objective**: Rapid A/B evaluation of competing algorithms and threshold parameters.
-- **Specification**: 4 memory snapshot slots (`F5`–`F8`) allowing artists to toggle between distinct workstation states without losing uncommitted adjustments.
-- **Success Metric**: Zero-latency instantaneous state toggling.
+- **Objective**: Rapid visual discovery across diverse aesthetic profiles.
+- **Specification**: Responsive multi-thumbnail gallery rendering active image across all presets simultaneously side-by-side with 1-click apply.
+- **Success Metric**: Multi-thumbnail grid rendered in $< 20\text{ms}$ total elapsed background time.
+
+### 3.7 Canvas Viewport Rulers, Magnetic Guides & Retro Aspect Grids (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Pixel-perfect layout alignment and retro display framing.
+- **Specification**: Border pixel rulers, draggable magnetic guidelines, and framing aspect overlays (Game Boy 10:9, CGA 4:3, NES 8:7, Arcade 3:4).
+- **Success Metric**: Crisp hairline rendering with zero overhead on canvas panning/zooming.
+
+### 3.8 Canvas Geometry Workshop: Crop, Rotate, Flip & Integer Scaling (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Non-destructive geometric image preparation.
+- **Specification**: Aspect-constrained crop box, 90° rotations, axis flips, and integer pixel scaling ($1\times, 2\times, 4\times, 8\times$).
+- **Success Metric**: Lossless integer pixel upscaling and responsive crop bounding box.
+
+### 3.9 Color Vision Deficiency (CVD) Real-Time Accessibility Filters (Phase 8)
+- **Target Milestone**: `v1.0.0`
+- **Objective**: Accessibility and high-contrast print legibility auditing.
+- **Specification**: Real-time viewport simulation modes based on Machado et al. (2009) and Brettel et al. (1997) for Protanopia, Deuteranopia, Tritanopia, and Achromatopsia.
+- **Success Metric**: 60 FPS real-time color re-mapping via direct 3x3 matrix multiplication.
 
 ### 3.10 Selective Spatial Dithering & Alpha Masking (Phase 9)
 - **Target Milestone**: `v1.1.0`
@@ -179,6 +205,78 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
 - **Objective**: Authentic vintage film and monitor phosphor color transformation.
 - **Specification**: Zero-dependency parser and trilinear interpolator for `.cube` (17×17×17, 33×33×33) 3D Look-Up Tables.
 - **Success Metric**: Bit-accurate trilinear interpolation running in $< 3\text{ms}$ on 1080p frames.
+
+### 3.13 CMYK Rosette Dot-Screen Angle Separations (Phase 10)
+- **Target Milestone**: `v1.1.0`
+- **Objective**: Professional offset printing screen separations with zero moiré.
+- **Specification**: Angular rosette halftoning with standard screen angles: Cyan (15°), Magenta (75°), Yellow (0°), and Black (45°) with configurable LPI and Yule-Nielsen dot gain compensation.
+- **Success Metric**: Moiré-free rosette patterns verified across synthetic gradients.
+
+### 3.14 Physical Spot Color Separations & Registration Target Generator (Phase 10)
+- **Target Milestone**: `v1.1.0`
+- **Objective**: Automated screen printing and risograph plate preparation.
+- **Specification**: Export individual printable positive films per swatch with corner registration marks (`+`), center bullseyes, and density calibration strips.
+- **Success Metric**: Valid multi-page or separated SVG/PDF files conforming to silkscreen standards.
+
+### 3.15 Pen Plotter Arc Fitting (G02/G03) & Bi-Directional Nib Offsetting (Phase 10)
+- **Target Milestone**: `v1.1.0`
+- **Objective**: Smooth mechanical plotter toolpaths and paper tear prevention.
+- **Specification**: Bi-directional stroke offsetting simulating nib widths ($0.1\text{mm}$ to $1.2\text{mm}$) and circular arc fitting converting polylines to native `G02`/`G03` commands.
+- **Success Metric**: $\ge 60\%$ reduction in G-code command count and zero plotter pen chatter.
+
+### 3.16 Geometric & Stippled Hatch Infill Patterns (Phase 10)
+- **Target Milestone**: `v1.1.0`
+- **Objective**: Solid and tonal hatching inside vector boundary paths.
+- **Specification**: Parallel line hatching, dual cross-hatching, concentric spiral infills, and Poisson-disk stippling for closed vector outlines.
+- **Success Metric**: Continuous non-lifting infill paths maximizing plotting speed.
+
+### 3.17 Keyframed Parameter Automation Timeline (Phase 11)
+- **Target Milestone**: `v1.2.0`
+- **Objective**: Dynamic parameter animation for music videos and cutscenes.
+- **Specification**: Multi-track timeline supporting keyframes for algorithm morphing, CRT scanlines, barrel curvature, and glitch intensity with cubic Bézier easing.
+- **Success Metric**: Smooth 60 FPS playback with real-time parameter interpolation.
+
+### 3.18 Inter-Frame Temporal Coherence & Flickering Suppression (Phase 11)
+- **Target Milestone**: `v1.2.0`
+- **Objective**: Elimination of temporal swimming noise in video sequences.
+- **Specification**: Propagate residual quantization errors across consecutive frames ($t \to t+1$) with optical-flow motion compensation.
+- **Success Metric**: $\ge 50\%$ reduction in temporal inter-frame pixel variance on static backgrounds.
+
+### 3.19 Traditional Animation Lightbox & Multi-Frame Onion Skinning (Phase 11)
+- **Target Milestone**: `v1.2.0`
+- **Objective**: Precise pixel rotoscoping and frame alignment.
+- **Specification**: Multi-frame onion skinning ghosting preceding (red) and succeeding (green) frames with configurable opacity.
+- **Success Metric**: Interactive frame stepping with instantaneous composite overlay rendering.
+
+### 3.20 Procedural Blue Noise Void & Cluster Synthesizer (Phase 12)
+- **Target Milestone**: `v1.3.0`
+- **Objective**: Custom isotropic high-frequency dither masks without external textures.
+- **Specification**: Pure-Rust Void and Cluster algorithm (Ulichney 1993) generating blue noise masks of any dimension ($32\times 32$ to $512\times 512$).
+- **Success Metric**: Flat blue noise radially averaged power spectrum with zero DC leakage.
+
+### 3.21 Reaction-Diffusion & Morphogenetic Dither Kernels (Phase 12)
+- **Target Milestone**: `v1.3.0`
+- **Objective**: Biological and organic generative dither aesthetics.
+- **Specification**: Real-time Gray-Scott reaction-diffusion equations generating labyrinthine, leopard spot, and coral stippling.
+- **Success Metric**: Stable PDE simulation at $> 60\text{ FPS}$ on $512\times 512$ grids.
+
+### 3.22 Vector Flow Field Steered Dithering (Phase 12)
+- **Target Milestone**: `v1.3.0`
+- **Objective**: Directional organic texturing and flow contour dithering.
+- **Specification**: Error diffusion steered along 2D vector flow fields generated from Perlin/Simplex gradient noise.
+- **Success Metric**: Continuous organic grain alignment following user-tuned flow angles.
+
+### 3.23 Serverless Browser-Native WebAssembly Workstation (Phase 13)
+- **Target Milestone**: `v1.4.0`
+- **Objective**: Zero-install instant browser accessibility with 100% client-side privacy.
+- **Specification**: Native compilation to `wasm32-unknown-unknown` utilizing WebGPU/WebGL2 shaders and WebAssembly SIMD (`wasm-simd128`).
+- **Success Metric**: Clean compilation and full GUI functionality in modern browsers.
+
+### 3.24 Stable C/Rust DSP Plugin ABI (`dither_core_ffi`) (Phase 13)
+- **Target Milestone**: `v1.4.0`
+- **Objective**: Extensible community DSP plugin ecosystem.
+- **Specification**: Stable C ABI definition allowing third-party developers to author custom dither kernels and post-effects as native dynamic libraries or Wasm modules.
+- **Success Metric**: Zero-copy host-plugin memory sharing and hot-reloadable plugin drawer.
 
 ---
 
