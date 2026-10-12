@@ -90,6 +90,17 @@ enum Commands {
         #[arg(long, default_value = "{name}_{algo}_{palette}")]
         pattern: String,
     },
+    /// Extract a quantized palette from an image and export to .gpl, .hex, .pal, .act, or .json
+    ExtractPalette {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(short, long, default_value_t = 16)]
+        colors: usize,
+        #[arg(long, default_value = "median-cut")]
+        method: String,
+    },
     /// Run Model Context Protocol (MCP) JSON-RPC server over stdio
     Mcp,
     /// Run internal latency and throughput micro-benchmarks
@@ -421,6 +432,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 total_count,
                 elapsed.as_secs_f64(),
                 (processed_count as f64) / elapsed.as_secs_f64().max(0.001)
+            );
+        }
+
+        Commands::ExtractPalette { input, output, colors, method } => {
+            let start = Instant::now();
+            let img = load_image(&input)?;
+            let pal = match method.to_lowercase().as_str() {
+                "kmeans" | "k-means" => Palette::from_image_kmeans("Extracted Palette", &img, colors, 10)?,
+                _ => Palette::from_image_median_cut("Extracted Palette", &img, colors)?,
+            };
+            pal.export_to_file(&output)?;
+            let elapsed = start.elapsed();
+            println!(
+                "Extracted {} colors using {} from {} -> {} in {:.2}ms",
+                pal.len(),
+                method,
+                input.display(),
+                output.display(),
+                elapsed.as_secs_f64() * 1000.0
             );
         }
 

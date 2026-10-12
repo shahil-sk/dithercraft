@@ -80,6 +80,11 @@ impl Palette {
         if self.swatches.is_empty() {
             return *target;
         }
+        for swatch in &self.swatches {
+            if swatch.color == *target {
+                return *target;
+            }
+        }
         let mut best_color = self.swatches[0].color;
 
         match metric {
@@ -142,6 +147,11 @@ impl Palette {
     pub fn find_nearest_index(&self, target: &RgbColor) -> usize {
         if self.swatches.is_empty() {
             return 0;
+        }
+        for (idx, swatch) in self.swatches.iter().enumerate() {
+            if swatch.color == *target {
+                return idx;
+            }
         }
         let mut best_idx = 0;
 
@@ -375,11 +385,105 @@ impl Palette {
         Self::new("JASC-PAL", colors)
     }
 
-    /// Import palette from a file path auto-detecting format by extension or content (.json, .hex, .gpl, .pal).
+    /// Parse Adobe Photoshop Color Table (.act) binary file format.
+    pub fn parse_act(name: &str, bytes: &[u8]) -> Result<Self, DitherError> {
+        if bytes.len() < 3 {
+            return Err(DitherError::PresetLoadFailed("ACT file too short".into()));
+        }
+        let total_triplets = bytes.len() / 3;
+        let count = if bytes.len() >= 772 {
+            let declared = u16::from_be_bytes([bytes[768], bytes[769]]) as usize;
+            if declared > 0 && declared <= 256 { declared } else { 256.min(total_triplets) }
+        } else if bytes.len() >= 768 {
+            256
+        } else {
+            total_triplets
+        };
+
+        let mut colors = Vec::with_capacity(count);
+        for i in 0..count {
+            if i * 3 + 2 < bytes.len() {
+                colors.push(RgbColor::new(bytes[i * 3], bytes[i * 3 + 1], bytes[i * 3 + 2]));
+            }
+        }
+        if colors.is_empty() {
+            return Err(DitherError::PresetLoadFailed("No valid colors found in ACT file".into()));
+        }
+        Self::new(name, colors)
+    }
+
+    /// Export palette in GIMP Palette (.gpl) standard format.
+    pub fn export_gpl(&self) -> String {
+        let mut out = format!("GIMP Palette\nName: {}\nColumns: 4\n#\n", self.name);
+        for s in &self.swatches {
+            out.push_str(&format!("{:3} {:3} {:3} Swatch\n", s.color.r, s.color.g, s.color.b));
+        }
+        out
+    }
+
+    /// Export palette in plain Hex (.hex) format (one '#RRGGBB' per line).
+    pub fn export_hex(&self) -> String {
+        let mut out = String::new();
+        for s in &self.swatches {
+            out.push_str(&format!("#{:02x}{:02x}{:02x}\n", s.color.r, s.color.g, s.color.b));
+        }
+        out
+    }
+
+    /// Export palette in JASC-PAL (.pal) format.
+    pub fn export_pal(&self) -> String {
+        let mut out = format!("JASC-PAL\n0100\n{}\n", self.swatches.len());
+        for s in &self.swatches {
+            out.push_str(&format!("{} {} {}\n", s.color.r, s.color.g, s.color.b));
+        }
+        out
+    }
+
+    /// Export palette in Adobe Photoshop Color Table (.act) 772-byte binary format.
+    pub fn export_act(&self) -> Vec<u8> {
+        let mut bytes = vec![0u8; 772];
+        let count = self.swatches.len().min(256);
+        for (i, s) in self.swatches.iter().take(count).enumerate() {
+            bytes[i * 3] = s.color.r;
+            bytes[i * 3 + 1] = s.color.g;
+            bytes[i * 3 + 2] = s.color.b;
+        }
+        let count_be = (count as u16).to_be_bytes();
+        bytes[768] = count_be[0];
+        bytes[769] = count_be[1];
+        bytes[770] = 0xFF; // transparent index high byte (0xFFFF for none)
+        bytes[771] = 0xFF; // transparent index low byte
+        bytes
+    }
+
+    /// Export palette to a file path auto-detecting format by extension (.gpl, .hex, .pal, .act, .json).
+    pub fn export_to_file(&self, path: &Path) -> Result<(), DitherError> {
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        match ext.as_str() {
+            "act" => std::fs::write(path, self.export_act()).map_err(|e| DitherError::PresetLoadFailed(e.to_string())),
+            "hex" => std::fs::write(path, self.export_hex()).map_err(|e| DitherError::PresetLoadFailed(e.to_string())),
+            "pal" => std::fs::write(path, self.export_pal()).map_err(|e| DitherError::PresetLoadFailed(e.to_string())),
+            "json" => {
+                let json = serde_json::to_string_pretty(self).map_err(|e| DitherError::PresetLoadFailed(e.to_string()))?;
+                std::fs::write(path, json).map_err(|e| DitherError::PresetLoadFailed(e.to_string()))
+            }
+            _ => std::fs::write(path, self.export_gpl()).map_err(|e| DitherError::PresetLoadFailed(e.to_string())),
+        }
+    }
+
+    /// Import palette from a file path auto-detecting format by extension or content (.json, .hex, .gpl, .pal, .act).
     pub fn import_from_file(path: &Path) -> Result<Self, DitherError> {
-        let content = std::fs::read_to_string(path).map_err(|e| DitherError::PresetLoadFailed(e.to_string()))?;
+        let bytes = std::fs::read(path).map_err(|e| DitherError::PresetLoadFailed(e.to_string()))?;
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Imported Palette");
+
+        if (ext == "act" || (bytes.len() >= 768 && bytes.len() <= 772))
+            && let Ok(pal) = Self::parse_act(name, &bytes)
+        {
+            return Ok(pal);
+        }
+
+        let content = String::from_utf8_lossy(&bytes);
         match ext.as_str() {
             "json" => Self::parse_json(&content),
             "hex" => Self::parse_hex(name, &content),
@@ -388,7 +492,8 @@ impl Palette {
             _ => Self::parse_json(&content)
                 .or_else(|_| Self::parse_gpl(&content))
                 .or_else(|_| Self::parse_pal(&content))
-                .or_else(|_| Self::parse_hex(name, &content)),
+                .or_else(|_| Self::parse_hex(name, &content))
+                .or_else(|_| Self::parse_act(name, &bytes)),
         }
     }
 

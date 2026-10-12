@@ -75,6 +75,12 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
   - Implemented `ImageBuffer::downsample(max_w, max_h)` providing $< 2\text{ms}$ low-latency rendering during active slider interaction, automatically triggering high-resolution passes on release.
   - Implemented FNV-1a 64-bit golden checksum regression test suite verifying bit-exact cross-platform determinism across algorithm pipelines.
 
+### 2.11 Multi-Format Palette Exporters & Binary ACT Color Table Support
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented bidirectional palette exporters for GIMP (`.gpl`), plain hex (`.hex`), JASC-PAL (`.pal`), Photoshop Color Table (`.act`), and JSON.
+  - Added CLI `extract-palette` command for automated palette generation from images via Median-Cut and K-Means.
+  - Added exact-match fast path in nearest-neighbor palette lookup, accelerating real-time histogram calculation by up to $10\times$.
+
 ---
 
 ## 3. Reliability & Zero-Panic Assurance

@@ -1328,12 +1328,29 @@ impl eframe::App for DitherCraftApp {
                     ui.separator();
 
                     if ui.button("Import Palette...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("Palette", &["json", "hex", "gpl", "pal"]).pick_file()
+                        if let Some(path) = rfd::FileDialog::new().add_filter("Palette", &["json", "hex", "gpl", "pal", "act"]).pick_file()
                             && let Ok(pal) = Palette::import_from_file(&path)
                         {
                             self.selected_palette_name = pal.name.clone();
                             self.active_palette = pal;
                             self.trigger_render();
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Export Active Palette...").clicked() {
+                        let fname = format!("{}.gpl", self.active_palette.name.to_lowercase().replace(' ', "-"));
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(&fname)
+                            .add_filter("GIMP Palette (.gpl)", &["gpl"])
+                            .add_filter("Color Table (.act)", &["act"])
+                            .add_filter("Hex Palette (.hex)", &["hex"])
+                            .add_filter("JASC-PAL (.pal)", &["pal"])
+                            .add_filter("JSON Palette (.json)", &["json"])
+                            .save_file()
+                            && let Ok(()) = self.active_palette.export_to_file(&path)
+                        {
+                            self.status_text = format!("Exported palette to {}", path.display());
                         }
                         ui.close_menu();
                     }
@@ -1679,10 +1696,27 @@ impl eframe::App for DitherCraftApp {
                     self.active_palette.swatches.remove(d);
                     changed = true;
                 }
-                if ui.button("+ Add Swatch").clicked() {
-                    self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
-                    changed = true;
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("+ Add Swatch").clicked() {
+                        self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
+                        changed = true;
+                    }
+                    if ui.button("💾 Export...").clicked() {
+                        let fname = format!("{}.gpl", self.active_palette.name.to_lowercase().replace(' ', "-"));
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(&fname)
+                            .add_filter("GIMP Palette (.gpl)", &["gpl"])
+                            .add_filter("Color Table (.act)", &["act"])
+                            .add_filter("Hex Palette (.hex)", &["hex"])
+                            .add_filter("JASC-PAL (.pal)", &["pal"])
+                            .add_filter("JSON Palette (.json)", &["json"])
+                            .save_file()
+                            && let Ok(()) = self.active_palette.export_to_file(&path)
+                        {
+                            self.status_text = format!("Exported palette to {}", path.display());
+                        }
+                    }
+                });
                 if lock_changed {
                     changed = true;
                 }

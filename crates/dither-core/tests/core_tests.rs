@@ -294,6 +294,29 @@ fn test_palette_parsers_json_hex_gpl_pal() {
     let pal_str = "JASC-PAL\n0100\n2\n0 0 0\n255 0 255\n";
     let pal_jasc = Palette::parse_pal(pal_str).expect("parse pal");
     assert_eq!(pal_jasc.len(), 2);
+
+    // 5. ACT (Adobe Color Table) export and parse roundtrip
+    let gb = Palette::game_boy();
+    let act_bytes = gb.export_act();
+    assert_eq!(act_bytes.len(), 772);
+    let pal_act = Palette::parse_act("GameBoy ACT", &act_bytes).expect("parse act");
+    assert_eq!(pal_act.len(), 4);
+    assert_eq!(pal_act.swatches[0].color, gb.swatches[0].color);
+
+    // 6. GPL export and parse roundtrip
+    let gpl_text = gb.export_gpl();
+    let pal_gpl_rt = Palette::parse_gpl(&gpl_text).expect("gpl roundtrip");
+    assert_eq!(pal_gpl_rt.len(), gb.len());
+
+    // 7. HEX export and parse roundtrip
+    let hex_text = gb.export_hex();
+    let pal_hex_rt = Palette::parse_hex("Hex RT", &hex_text).expect("hex roundtrip");
+    assert_eq!(pal_hex_rt.len(), gb.len());
+
+    // 8. PAL export and parse roundtrip
+    let pal_text = gb.export_pal();
+    let pal_jasc_rt = Palette::parse_pal(&pal_text).expect("pal roundtrip");
+    assert_eq!(pal_jasc_rt.len(), gb.len());
 }
 
 #[test]
