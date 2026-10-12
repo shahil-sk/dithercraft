@@ -253,3 +253,42 @@ Downstream, layer-based effect stack executing after core dithering/quantization
 ### 10.7 Phase 13: WebAssembly Studio & Zero-Dependency Plugin API
 - **Serverless Browser-Native WebAssembly Workstation [Delivered in v0.9.8]**: Native compilation to `wasm32-unknown-unknown` under `cargo xtask ci` with zero host OS dependencies.
 - **Stable C/Rust DSP Plugin ABI (`dither_core_ffi`) [Delivered in v0.9.8]**: Stable C ABI definition and C header (`include/dither_core_ffi.h`) allowing community developers to author custom dithering kernels and post-effects as native dynamic libraries or Wasm modules.
+
+---
+
+## 11. Next-Gen Studio Workstation Specifications (Phases 14–18)
+
+### 11.1 Phase 14: Studio-Grade UI/UX Architecture & Ergonomics
+- **Modular Docking System (`egui_dock`)**: Dockable, tear-off tabbed split panels for Viewport, Algorithm Parameters, Effect Stack, Curves/Levels, Palette Studio, Timeline, Mask Inspector, and Telemetry.
+- **Universal Command Palette (`Ctrl+K` / `Cmd+K`)**: Fuzzy-matched search launcher for instant algorithm activation, preset loading, transforms, and export operations.
+- **Studio Theme Customization**: Pre-calibrated palettes for *Cyberpunk Neon*, *Amber Phosphor*, *Green VT220*, *Macintosh Platinum 1984*, and *Slate Studio*, with high-DPI font scaling ($75\%\dots 200\%$).
+- **Telemetry HUD & Memory Arena Gauge**: Live microsecond per-stage profiling ($T_{\text{dither}}, T_{\text{effects}}, T_{\text{gpu}}$), memory pool allocation counter, and AVX2/NEON SIMD active badges.
+- **Custom Keymap Rebinding**: Configurable hotkey profiles with Photoshop, Aseprite, and Blender compatibility layouts.
+
+### 11.2 Phase 15: Spatial Masking & Dual-Algorithm Blending
+- **Paintbrush & Eraser Mask Tool**: Interactive raster paintbrush modifying an 8-bit grayscale `MaskBuffer` with configurable radius ($1\dots 512\text{px}$), Hermite smoothstep edge feathering ($0\%\dots 100\%$), opacity, and stylus pressure sensitivity.
+- **Procedural Gradient Masks**: Interactive linear, radial/vignette, and conical gradient generation with boolean invert/clear operators.
+- **Tonal & Color Proximity Range Masking**: Parametric luminance isolation (Shadows, Midtones, Highlights) and OKLab $\Delta E$ color range extraction.
+- **Dual-Algorithm Parallel Scanline Blending**: Independent algorithm dispatch (Algorithm A inside mask, Algorithm B outside mask) blended in linear sRGB color space via zero-allocation Rayon chunking.
+- **Quick Mask Ruby Overlay (`Q`)**: Translucent `#FF005580` viewport mask feedback.
+
+### 11.3 Phase 16: Interactive Selection Tools & Vector Marquees
+- **Geometric Marquee Selection**: Rectangular (`M`) and Elliptical (`Shift+M`) marquees with 1:1 aspect constraint and pixel dimension locking.
+- **Freeform & Semantic Selection**: Freehand Lasso (`L`), Polygonal Lasso, Magic Wand (`W`) flood selection with OKLab distance tolerance, and global color range selection.
+- **Animated Marching Ants Overlay**: Real-time 2D Moore-neighbor contour stroke shader with $2\text{ Hz}$ phase rotation.
+- **Selection Arithmetic & Boundary Modifiers**: Add (`Shift`), Subtract (`Alt`), Intersect (`Shift+Alt`), feathering ($1\dots 64\text{px}$), expand/contract dilation/erosion, and spline smoothing.
+- **Selection-to-Mask Interoperability**: Instant bidirectional conversion (`Ctrl+Shift+M` / `Ctrl+Click`) and selection-bounded rendering acceleration.
+
+### 11.4 Phase 17: Enterprise Media Ingestion & Robust File Pipeline
+- **Asynchronous Multi-Format Decoders**: Non-blocking Rayon loading pipeline for PNG, JPEG, WebP, GIF, BMP, TIFF, TGA, ICO, QOI, AVIF, HDR, SVG (dynamic DPI rasterization), and animated APNG/WebP/GIF.
+- **Gigapixel Memory-Mapped Streaming (`memmap2`)**: Tiled memory-mapped access for images $> 100\text{ MB}$ or $> 16\text{ MP}$ with decompression bomb dimension safeguards.
+- **Desktop Drag-and-Drop Router**: Native OS drag-and-drop routing for images, animation sequences, `.dcpreset` files, `.cube` LUTs, and `.gpl` palettes.
+- **File System Watcher & Auto-Reload**: Background disk watcher (`notify` crate) automatically refreshing the canvas when external creative apps save source edits.
+- **Persistent Recent Files Registry**: SQLite/JSON history tracking up to 30 items with $96\times 96$ cached thumbnails and missing file validation.
+- **Image Sequence Importer**: Automated numbered sequence ingestion (`img_001.png`... `img_999.png`) directly onto the animation timeline.
+
+### 11.5 Phase 18: Project Bundles, Batch Automation Studio & Ecosystem
+- **Portable Project Bundle Format (`.dithercraft` / `.dcp`)**: Compressed ZIP archive preserving source frames, `project.json`, embedded masks, custom matrices, and 3D LUTs.
+- **Multi-Target Batch Automation Studio**: Multi-threaded folder batch export with customizable file templates (`{stem}_{algo}_{palette}_{dims}_{timestamp}`).
+- **OS Clipboard Interoperability**: Direct pixel buffer copy (`Ctrl+C`) and paste (`Ctrl+V`) to/from OS clipboard.
+- **Headless JSON-RPC / MCP Streaming Daemon**: Remote control IPC protocol for programmatic automation and AI agent workstation control.
