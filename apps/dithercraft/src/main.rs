@@ -2,8 +2,8 @@
 
 use dither_core::{
     AudioSpectrum, AudioTrack, CadenceMode, CmykHalftone, Cube3dLut, FlowFieldConfig, FlowFieldSteeredDither, HalftoneDotShape, ImageBuffer,
-    Mp4Demuxer, OnionSkinConfig, ReactionDiffusionConfig, ReactionDiffusionDither, ReactionDiffusionMorphology, TonalBandDither, WebmDemuxer,
-    WebpAnimFrame, WebpAnimationMuxer,
+    Mp4Demuxer, OnionSkinConfig, ReactionDiffusionConfig, ReactionDiffusionDither, ReactionDiffusionMorphology, TonalBandDither, ToneCurve,
+    WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
     algorithms::*,
     color::{ColorHarmony, CvdMode, RgbColor},
     effects::*,
@@ -212,6 +212,9 @@ pub struct StudioPreset {
     #[serde(default = "default_lut_preset")]
     pub lut_preset: String,
 
+    #[serde(default)]
+    pub tone_curve: Option<ToneCurve>,
+
     pub glow_enabled: bool,
     pub glow_threshold: u8,
     pub glow_radius: usize,
@@ -256,6 +259,7 @@ impl StudioPreset {
                 cvd_mode: CvdMode::Normal,
                 lut_enabled: false,
                 lut_preset: "Technicolor 2-Strip".into(),
+                tone_curve: None,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -290,6 +294,7 @@ impl StudioPreset {
                 cvd_mode: CvdMode::Normal,
                 lut_enabled: true,
                 lut_preset: "Cyber Matrix".into(),
+                tone_curve: None,
                 glow_enabled: true,
                 glow_threshold: 160,
                 glow_radius: 6,
@@ -324,6 +329,7 @@ impl StudioPreset {
                 cvd_mode: CvdMode::Normal,
                 lut_enabled: true,
                 lut_preset: "Vintage Warm 1970".into(),
+                tone_curve: None,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -358,6 +364,7 @@ impl StudioPreset {
                 cvd_mode: CvdMode::Normal,
                 lut_enabled: false,
                 lut_preset: "Technicolor 2-Strip".into(),
+                tone_curve: None,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -392,6 +399,7 @@ impl StudioPreset {
                 cvd_mode: CvdMode::Normal,
                 lut_enabled: false,
                 lut_preset: "Technicolor 2-Strip".into(),
+                tone_curve: None,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -416,6 +424,60 @@ impl StudioPreset {
             },
         ]
     }
+}
+
+/// Actions executable from the Universal Command Palette.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommandActionKind {
+    SetAlgorithm(String),
+    ApplyPreset(StudioPreset),
+    SetTool(WorkstationTool),
+    ToggleQuickMask,
+    SelectAll,
+    Deselect,
+    InvertSelection,
+    InvertMask,
+    ClearMask,
+    GradientMaskLinear,
+    GradientMaskRadial,
+    TransformRotate90Cw,
+    TransformRotate180,
+    TransformRotate270Cw,
+    TransformFlipH,
+    TransformFlipV,
+    TransformScale2x,
+    TransformScale4x,
+    OpenCropWorkshop,
+    OpenCurvesWorkshop,
+    OpenPresetGallery,
+    OpenHarmonies,
+    OpenBatchStudio,
+    OpenShortcuts,
+    OpenAbout,
+    ToggleTelemetry,
+    ToggleLoupe,
+    ToggleSplitView,
+    TogglePixelGrid,
+    SetTheme(StudioTheme),
+    ExportPng,
+    ExportJpeg,
+    ExportWebp,
+    ExportSvg,
+    ExportGif,
+    ExportWebpAnim,
+    ExportGCode,
+    ResetPanZoom,
+    Undo,
+    Redo,
+}
+
+/// Catalog entry in the Universal Command Palette.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandItem {
+    pub title: String,
+    pub category: &'static str,
+    pub shortcut: Option<&'static str>,
+    pub kind: CommandActionKind,
 }
 
 struct RenderJobResult {
@@ -616,6 +678,16 @@ pub struct DitherCraftApp {
     drag_start_pixel: Option<(f32, f32)>,
     drag_current_pixel: Option<(f32, f32)>,
     marching_ants_phase: f32,
+
+    // Phase 8.1: Parametric Tone Curves Workshop
+    tone_curve: ToneCurve,
+    show_curves_dialog: bool,
+    curves_dragged_point: Option<usize>,
+
+    // Phase 14.2: Universal Command Palette
+    show_command_palette: bool,
+    command_search_query: String,
+    command_selected_index: usize,
 }
 
 impl DitherCraftApp {
@@ -808,6 +880,16 @@ impl DitherCraftApp {
             drag_start_pixel: None,
             drag_current_pixel: None,
             marching_ants_phase: 0.0,
+
+            // Phase 8.1: Parametric Tone Curves Workshop
+            tone_curve: ToneCurve::linear(),
+            show_curves_dialog: false,
+            curves_dragged_point: None,
+
+            // Phase 14.2: Universal Command Palette
+            show_command_palette: false,
+            command_search_query: String::new(),
+            command_selected_index: 0,
         }
     }
 
@@ -894,6 +976,503 @@ impl DitherCraftApp {
             self.selection = Some(SelectionBuffer::from_mask(mask.clone()));
             self.status_text = "Extracted selection from mask".into();
         }
+    }
+
+    /// Build catalog of all commands and actions available in the Universal Command Palette.
+    pub fn build_command_catalog(&self) -> Vec<CommandItem> {
+        let mut items = Vec::with_capacity(120);
+
+        // 1. Algorithms
+        for algo in ALL_ALGORITHMS {
+            items.push(CommandItem {
+                title: format!("Apply Algorithm: {}", algo.name),
+                category: "Algorithm",
+                shortcut: None,
+                kind: CommandActionKind::SetAlgorithm(algo.name.to_string()),
+            });
+        }
+        items.push(CommandItem {
+            title: "Apply Algorithm: Tonal Band Multi-Dither".into(),
+            category: "Algorithm",
+            shortcut: None,
+            kind: CommandActionKind::SetAlgorithm("Tonal Band Multi-Dither".into()),
+        });
+        items.push(CommandItem {
+            title: "Apply Algorithm: Custom Threshold Matrix".into(),
+            category: "Algorithm",
+            shortcut: None,
+            kind: CommandActionKind::SetAlgorithm("Custom Threshold Matrix".into()),
+        });
+        items.push(CommandItem {
+            title: "Apply Algorithm: Reaction-Diffusion (Morphogenesis)".into(),
+            category: "Algorithm",
+            shortcut: None,
+            kind: CommandActionKind::SetAlgorithm("Morphogenesis (Reaction-Diffusion)".into()),
+        });
+        items.push(CommandItem {
+            title: "Apply Algorithm: Vector Flow Field Dither".into(),
+            category: "Algorithm",
+            shortcut: None,
+            kind: CommandActionKind::SetAlgorithm("Vector Flow Field".into()),
+        });
+
+        // 2. Curated Presets
+        for preset in StudioPreset::bundled_presets() {
+            items.push(CommandItem {
+                title: format!("Load Preset: {}", preset.name),
+                category: "Preset",
+                shortcut: None,
+                kind: CommandActionKind::ApplyPreset(preset),
+            });
+        }
+
+        // 3. Workstation Tools
+        items.push(CommandItem {
+            title: "Tool: Pointer / Pan (V)".into(),
+            category: "Tool",
+            shortcut: Some("V"),
+            kind: CommandActionKind::SetTool(WorkstationTool::Pointer),
+        });
+        items.push(CommandItem {
+            title: "Tool: Brush Mask (B)".into(),
+            category: "Tool",
+            shortcut: Some("B"),
+            kind: CommandActionKind::SetTool(WorkstationTool::BrushMask),
+        });
+        items.push(CommandItem {
+            title: "Tool: Eraser Mask (E)".into(),
+            category: "Tool",
+            shortcut: Some("E"),
+            kind: CommandActionKind::SetTool(WorkstationTool::EraserMask),
+        });
+        items.push(CommandItem {
+            title: "Tool: Rect Marquee Selection (M)".into(),
+            category: "Tool",
+            shortcut: Some("M"),
+            kind: CommandActionKind::SetTool(WorkstationTool::RectMarquee),
+        });
+        items.push(CommandItem {
+            title: "Tool: Ellipse Marquee Selection".into(),
+            category: "Tool",
+            shortcut: None,
+            kind: CommandActionKind::SetTool(WorkstationTool::EllipseMarquee),
+        });
+        items.push(CommandItem {
+            title: "Tool: Freeform Lasso Selection".into(),
+            category: "Tool",
+            shortcut: None,
+            kind: CommandActionKind::SetTool(WorkstationTool::Lasso),
+        });
+        items.push(CommandItem {
+            title: "Tool: Magic Wand Selection (W)".into(),
+            category: "Tool",
+            shortcut: Some("W"),
+            kind: CommandActionKind::SetTool(WorkstationTool::MagicWand),
+        });
+
+        // 4. Selection & Mask Actions
+        items.push(CommandItem {
+            title: "Toggle Quick Mask Overlay (Q)".into(),
+            category: "Mask",
+            shortcut: Some("Q"),
+            kind: CommandActionKind::ToggleQuickMask,
+        });
+        items.push(CommandItem { title: "Select All".into(), category: "Selection", shortcut: Some("Ctrl+A"), kind: CommandActionKind::SelectAll });
+        items.push(CommandItem { title: "Deselect".into(), category: "Selection", shortcut: Some("Ctrl+D"), kind: CommandActionKind::Deselect });
+        items.push(CommandItem {
+            title: "Invert Selection".into(),
+            category: "Selection",
+            shortcut: Some("Ctrl+Shift+I"),
+            kind: CommandActionKind::InvertSelection,
+        });
+        items.push(CommandItem { title: "Invert Alpha Mask".into(), category: "Mask", shortcut: None, kind: CommandActionKind::InvertMask });
+        items.push(CommandItem { title: "Clear Alpha Mask".into(), category: "Mask", shortcut: None, kind: CommandActionKind::ClearMask });
+        items.push(CommandItem {
+            title: "Apply Horizontal Linear Gradient to Mask".into(),
+            category: "Mask",
+            shortcut: None,
+            kind: CommandActionKind::GradientMaskLinear,
+        });
+        items.push(CommandItem {
+            title: "Apply Centered Radial Gradient to Mask".into(),
+            category: "Mask",
+            shortcut: None,
+            kind: CommandActionKind::GradientMaskRadial,
+        });
+
+        // 5. Transforms & Geometry
+        items.push(CommandItem {
+            title: "Rotate 90° Clockwise".into(),
+            category: "Transform",
+            shortcut: None,
+            kind: CommandActionKind::TransformRotate90Cw,
+        });
+        items.push(CommandItem { title: "Rotate 180°".into(), category: "Transform", shortcut: None, kind: CommandActionKind::TransformRotate180 });
+        items.push(CommandItem {
+            title: "Rotate 90° Counter-Clockwise".into(),
+            category: "Transform",
+            shortcut: None,
+            kind: CommandActionKind::TransformRotate270Cw,
+        });
+        items.push(CommandItem { title: "Flip Horizontal".into(), category: "Transform", shortcut: None, kind: CommandActionKind::TransformFlipH });
+        items.push(CommandItem { title: "Flip Vertical".into(), category: "Transform", shortcut: None, kind: CommandActionKind::TransformFlipV });
+        items.push(CommandItem {
+            title: "2x Integer Scale (Nearest Neighbor)".into(),
+            category: "Transform",
+            shortcut: None,
+            kind: CommandActionKind::TransformScale2x,
+        });
+        items.push(CommandItem {
+            title: "4x Integer Scale (Nearest Neighbor)".into(),
+            category: "Transform",
+            shortcut: None,
+            kind: CommandActionKind::TransformScale4x,
+        });
+        items.push(CommandItem {
+            title: "Crop Canvas Workshop...".into(),
+            category: "Transform",
+            shortcut: None,
+            kind: CommandActionKind::OpenCropWorkshop,
+        });
+
+        // 6. Windows & Workshops
+        items.push(CommandItem {
+            title: "Parametric Tone Curves Workshop...".into(),
+            category: "Window",
+            shortcut: None,
+            kind: CommandActionKind::OpenCurvesWorkshop,
+        });
+        items.push(CommandItem {
+            title: "Visual Preset Gallery...".into(),
+            category: "Window",
+            shortcut: None,
+            kind: CommandActionKind::OpenPresetGallery,
+        });
+        items.push(CommandItem {
+            title: "OKLCH Perceptual Color Harmonies...".into(),
+            category: "Window",
+            shortcut: None,
+            kind: CommandActionKind::OpenHarmonies,
+        });
+        items.push(CommandItem {
+            title: "Batch Processing Studio...".into(),
+            category: "Window",
+            shortcut: None,
+            kind: CommandActionKind::OpenBatchStudio,
+        });
+        items.push(CommandItem {
+            title: "Keyboard Shortcuts Cheatsheet...".into(),
+            category: "Window",
+            shortcut: Some("F1"),
+            kind: CommandActionKind::OpenShortcuts,
+        });
+        items.push(CommandItem { title: "About DitherCraft...".into(), category: "Window", shortcut: None, kind: CommandActionKind::OpenAbout });
+
+        // 7. View & Telemetry Toggles
+        items.push(CommandItem {
+            title: "Toggle Pipeline Telemetry HUD".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::ToggleTelemetry,
+        });
+        items.push(CommandItem {
+            title: "Toggle Precision Magnifier Loupe (L)".into(),
+            category: "View",
+            shortcut: Some("L"),
+            kind: CommandActionKind::ToggleLoupe,
+        });
+        items.push(CommandItem {
+            title: "Toggle Split-View Comparison".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::ToggleSplitView,
+        });
+        items.push(CommandItem {
+            title: "Toggle Pixel Grid (>=800%)".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::TogglePixelGrid,
+        });
+        items.push(CommandItem {
+            title: "Reset Canvas Pan & Zoom (1:1)".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::ResetPanZoom,
+        });
+
+        // 8. Studio Themes
+        items.push(CommandItem {
+            title: "Set Theme: Studio Dark".into(),
+            category: "Theme",
+            shortcut: None,
+            kind: CommandActionKind::SetTheme(StudioTheme::StudioDark),
+        });
+        items.push(CommandItem {
+            title: "Set Theme: Amber CRT".into(),
+            category: "Theme",
+            shortcut: None,
+            kind: CommandActionKind::SetTheme(StudioTheme::AmberCrt),
+        });
+        items.push(CommandItem {
+            title: "Set Theme: Cyber Matrix".into(),
+            category: "Theme",
+            shortcut: None,
+            kind: CommandActionKind::SetTheme(StudioTheme::CyberMatrix),
+        });
+        items.push(CommandItem {
+            title: "Set Theme: Vapor Slate".into(),
+            category: "Theme",
+            shortcut: None,
+            kind: CommandActionKind::SetTheme(StudioTheme::VaporSlate),
+        });
+        items.push(CommandItem {
+            title: "Set Theme: Industrial High-Contrast".into(),
+            category: "Theme",
+            shortcut: None,
+            kind: CommandActionKind::SetTheme(StudioTheme::IndustrialHighContrast),
+        });
+
+        // 9. Exports
+        items.push(CommandItem { title: "Save Rendered PNG...".into(), category: "Export", shortcut: None, kind: CommandActionKind::ExportPng });
+        items.push(CommandItem { title: "Save Rendered JPEG...".into(), category: "Export", shortcut: None, kind: CommandActionKind::ExportJpeg });
+        items.push(CommandItem { title: "Save Rendered WebP...".into(), category: "Export", shortcut: None, kind: CommandActionKind::ExportWebp });
+        items.push(CommandItem {
+            title: "Export Smooth Bézier Spline SVG...".into(),
+            category: "Export",
+            shortcut: None,
+            kind: CommandActionKind::ExportSvg,
+        });
+        items.push(CommandItem { title: "Export Animated GIF...".into(), category: "Export", shortcut: None, kind: CommandActionKind::ExportGif });
+        items.push(CommandItem {
+            title: "Export Animated WebP...".into(),
+            category: "Export",
+            shortcut: None,
+            kind: CommandActionKind::ExportWebpAnim,
+        });
+        items.push(CommandItem {
+            title: "Export CNC / Plotter G-Code...".into(),
+            category: "Export",
+            shortcut: None,
+            kind: CommandActionKind::ExportGCode,
+        });
+
+        // 10. History
+        items.push(CommandItem { title: "Undo".into(), category: "Edit", shortcut: Some("Ctrl+Z"), kind: CommandActionKind::Undo });
+        items.push(CommandItem { title: "Redo".into(), category: "Edit", shortcut: Some("Ctrl+Shift+Z"), kind: CommandActionKind::Redo });
+
+        items
+    }
+
+    /// Execute a command action selected from the Universal Command Palette.
+    pub fn execute_command_action(&mut self, kind: CommandActionKind, ctx: &egui::Context) {
+        match kind {
+            CommandActionKind::SetAlgorithm(algo) => {
+                self.record_undo_state();
+                self.selected_algo = algo.clone();
+                self.status_text = format!("Selected algorithm: {algo}");
+                self.trigger_render();
+            }
+            CommandActionKind::ApplyPreset(preset) => {
+                self.record_undo_state();
+                self.apply_preset(&preset);
+                self.status_text = format!("Loaded preset: {}", preset.name);
+            }
+            CommandActionKind::SetTool(tool) => {
+                self.active_tool = tool;
+                self.status_text = format!("Active tool: {}", tool.label());
+            }
+            CommandActionKind::ToggleQuickMask => {
+                self.quick_mask_active = !self.quick_mask_active;
+                self.status_text = format!("Quick Mask: {}", if self.quick_mask_active { "ON" } else { "OFF" });
+                self.update_texture(ctx);
+            }
+            CommandActionKind::SelectAll => {
+                self.select_all();
+            }
+            CommandActionKind::Deselect => {
+                self.deselect();
+            }
+            CommandActionKind::InvertSelection => {
+                self.invert_selection();
+            }
+            CommandActionKind::InvertMask => {
+                if let Some(ref mut m) = self.mask {
+                    m.invert();
+                    if self.mask_blend_enabled {
+                        self.trigger_render();
+                    } else {
+                        self.update_texture(ctx);
+                    }
+                    self.status_text = "Inverted alpha mask".into();
+                }
+            }
+            CommandActionKind::ClearMask => {
+                if let Some(ref mut m) = self.mask {
+                    m.clear();
+                    if self.mask_blend_enabled {
+                        self.trigger_render();
+                    } else {
+                        self.update_texture(ctx);
+                    }
+                    self.status_text = "Cleared alpha mask".into();
+                }
+            }
+            CommandActionKind::GradientMaskLinear => {
+                if let Some(ref mut m) = self.mask {
+                    m.apply_linear_gradient(0.0, 0.0, m.width as f32, 0.0);
+                    if self.mask_blend_enabled {
+                        self.trigger_render();
+                    } else {
+                        self.update_texture(ctx);
+                    }
+                    self.status_text = "Applied linear gradient to mask".into();
+                }
+            }
+            CommandActionKind::GradientMaskRadial => {
+                if let Some(ref mut m) = self.mask {
+                    let cx = m.width as f32 * 0.5;
+                    let cy = m.height as f32 * 0.5;
+                    m.apply_radial_gradient(cx, cy, 0.0, cx.min(cy));
+                    if self.mask_blend_enabled {
+                        self.trigger_render();
+                    } else {
+                        self.update_texture(ctx);
+                    }
+                    self.status_text = "Applied radial gradient to mask".into();
+                }
+            }
+            CommandActionKind::TransformRotate90Cw => {
+                self.transform_rotate_90_cw();
+            }
+            CommandActionKind::TransformRotate180 => {
+                self.transform_rotate_180();
+            }
+            CommandActionKind::TransformRotate270Cw => {
+                self.transform_rotate_270_cw();
+            }
+            CommandActionKind::TransformFlipH => {
+                self.transform_flip_horizontal();
+            }
+            CommandActionKind::TransformFlipV => {
+                self.transform_flip_vertical();
+            }
+            CommandActionKind::TransformScale2x => {
+                self.transform_scale_integer(2);
+            }
+            CommandActionKind::TransformScale4x => {
+                self.transform_scale_integer(4);
+            }
+            CommandActionKind::OpenCropWorkshop => {
+                if let Some(src) = &self.source_image {
+                    self.crop_x = 0;
+                    self.crop_y = 0;
+                    self.crop_width = src.width;
+                    self.crop_height = src.height;
+                    self.crop_dialog_open = true;
+                }
+            }
+            CommandActionKind::OpenCurvesWorkshop => {
+                self.show_curves_dialog = true;
+            }
+            CommandActionKind::OpenPresetGallery => {
+                self.show_preset_gallery = true;
+            }
+            CommandActionKind::OpenHarmonies => {
+                self.show_harmonies_dialog = true;
+            }
+            CommandActionKind::OpenBatchStudio => {
+                self.show_batch_studio = true;
+            }
+            CommandActionKind::OpenShortcuts => {
+                self.show_shortcuts_dialog = true;
+            }
+            CommandActionKind::OpenAbout => {
+                self.show_about = true;
+            }
+            CommandActionKind::ToggleTelemetry => {
+                self.show_telemetry_hud = !self.show_telemetry_hud;
+            }
+            CommandActionKind::ToggleLoupe => {
+                self.show_loupe = !self.show_loupe;
+            }
+            CommandActionKind::ToggleSplitView => {
+                self.split_view_enabled = !self.split_view_enabled;
+                self.trigger_render();
+            }
+            CommandActionKind::TogglePixelGrid => {
+                self.show_pixel_grid = !self.show_pixel_grid;
+            }
+            CommandActionKind::SetTheme(theme) => {
+                self.theme = theme;
+            }
+            CommandActionKind::ExportPng => {
+                let fname = self.suggested_filename("png");
+                if let Some(ref img) = self.rendered_image
+                    && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("PNG Image", &["png"]).save_file()
+                {
+                    let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                    self.status_text = format!("Saved PNG to {}", path.display());
+                }
+            }
+            CommandActionKind::ExportJpeg => {
+                let fname = self.suggested_filename("jpg");
+                if let Some(ref img) = self.rendered_image
+                    && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("JPEG Image", &["jpg", "jpeg"]).save_file()
+                {
+                    let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                    self.status_text = format!("Saved JPEG to {}", path.display());
+                }
+            }
+            CommandActionKind::ExportWebp => {
+                let fname = self.suggested_filename("webp");
+                if let Some(ref img) = self.rendered_image
+                    && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("WebP Image", &["webp"]).save_file()
+                {
+                    let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                    self.status_text = format!("Saved WebP to {}", path.display());
+                }
+            }
+            CommandActionKind::ExportSvg => {
+                let fname = self.suggested_filename("svg");
+                if let Some(ref img) = self.rendered_image
+                    && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("Smooth Bézier SVG", &["svg"]).save_file()
+                    && let Ok(svg) = export_smooth_bezier_svg(img, 128, 0.5)
+                {
+                    let _ = std::fs::write(path, svg);
+                    self.status_text = "Exported smooth Bézier spline SVG".into();
+                }
+            }
+            CommandActionKind::ExportGif => {
+                self.status_text = "Open File -> Export Animated GIF to configure animation options".into();
+            }
+            CommandActionKind::ExportWebpAnim => {
+                self.status_text = "Open File -> Export Animated WebP to configure animation options".into();
+            }
+            CommandActionKind::ExportGCode => {
+                let fname = self.suggested_filename("gcode");
+                if let Some(ref img) = self.rendered_image
+                    && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("CNC G-Code", &["gcode", "nc"]).save_file()
+                {
+                    let config = GCodeConfig::default();
+                    if let Ok(gcode) = GCodeExporter::generate_gcode(img, &config) {
+                        let _ = std::fs::write(path, gcode);
+                        self.status_text = "Exported plotter G-code with TSP sorting".into();
+                    }
+                }
+            }
+            CommandActionKind::ResetPanZoom => {
+                self.canvas_pan = egui::Vec2::ZERO;
+                self.canvas_zoom = 1.0;
+                self.status_text = "Reset Canvas Pan & Zoom (1:1)".into();
+            }
+            CommandActionKind::Undo => {
+                self.undo();
+            }
+            CommandActionKind::Redo => {
+                self.redo();
+            }
+        }
+        self.show_command_palette = false;
     }
 
     fn shuffle_adjustments(&mut self) {
@@ -1206,6 +1785,7 @@ impl DitherCraftApp {
 
             lut_enabled: self.lut_enabled,
             lut_preset: self.lut_preset_name.clone(),
+            tone_curve: if self.tone_curve.is_identity() { None } else { Some(self.tone_curve.clone()) },
         }
     }
 
@@ -1264,6 +1844,7 @@ impl DitherCraftApp {
         self.lut_enabled = preset.lut_enabled;
         self.lut_preset_name = preset.lut_preset.clone();
         self.custom_lut = None;
+        self.tone_curve = preset.tone_curve.clone().unwrap_or_else(ToneCurve::linear);
 
         self.trigger_render();
     }
@@ -1453,6 +2034,7 @@ impl DitherCraftApp {
         let flow_swirl = self.flow_swirl;
 
         let mask_blend_opt = if self.mask_blend_enabled { self.mask.clone().map(|m| (m, self.secondary_algo.clone())) } else { None };
+        let tone_curve = self.tone_curve.clone();
 
         self.is_rendering = true;
         let gen_id = self.render_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1490,6 +2072,9 @@ impl DitherCraftApp {
             let mut input_buf = (*source).clone();
             if let Some(ref lut) = lut_opt {
                 lut.apply_buffer(&mut input_buf);
+            }
+            if !tone_curve.is_identity() {
+                tone_curve.apply(&mut input_buf);
             }
             if levels_black > 0 || levels_white < 255 || (levels_gamma - 1.0).abs() > 0.001 {
                 input_buf.adjust_levels(levels_black, levels_white, levels_gamma);
@@ -1763,6 +2348,15 @@ impl eframe::App for DitherCraftApp {
         // Toggle Keyboard Shortcuts Cheatsheet (F1 or ?)
         if ctx.input(|i| i.key_pressed(egui::Key::F1) || (i.modifiers.shift && i.key_pressed(egui::Key::Slash))) {
             self.show_shortcuts_dialog = !self.show_shortcuts_dialog;
+        }
+
+        // Toggle Universal Command Palette (Ctrl+K / Cmd+K)
+        if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::K)) {
+            self.show_command_palette = !self.show_command_palette;
+            if self.show_command_palette {
+                self.command_search_query.clear();
+                self.command_selected_index = 0;
+            }
         }
 
         // Handle Drag & Drop
@@ -2406,12 +3000,37 @@ impl eframe::App for DitherCraftApp {
                 });
 
                 ui.menu_button("Edit", |ui| {
+                    if ui.button("🔍 Command Palette (Ctrl+K)...").clicked() {
+                        self.show_command_palette = true;
+                        self.command_search_query.clear();
+                        self.command_selected_index = 0;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Undo (Ctrl+Z)").clicked() {
                         self.undo();
                         ui.close_menu();
                     }
                     if ui.button("Redo (Ctrl+Shift+Z)").clicked() {
                         self.redo();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("📈 Parametric Tone Curves Workshop...").clicked() {
+                        self.show_curves_dialog = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Select All (Ctrl+A)").clicked() {
+                        self.select_all();
+                        ui.close_menu();
+                    }
+                    if ui.button("Deselect (Ctrl+D)").clicked() {
+                        self.deselect();
+                        ui.close_menu();
+                    }
+                    if ui.button("Invert Selection (Ctrl+Shift+I)").clicked() {
+                        self.invert_selection();
                         ui.close_menu();
                     }
                 });
@@ -2575,6 +3194,16 @@ impl eframe::App for DitherCraftApp {
                         ui.close_menu();
                     }
                 });
+
+                ui.separator();
+                if ui.button("🔍 Command Palette (Ctrl+K)").on_hover_text("Open Universal Command Palette (Ctrl+K / Cmd+K)").clicked() {
+                    self.show_command_palette = true;
+                    self.command_search_query.clear();
+                    self.command_selected_index = 0;
+                }
+                if ui.button("📈 Curves").on_hover_text("Open Parametric Tone Curves Workshop").clicked() {
+                    self.show_curves_dialog = true;
+                }
             });
         });
 
@@ -2682,6 +3311,10 @@ impl eframe::App for DitherCraftApp {
 
                     ui.label("Invert Selection");
                     ui.monospace("Ctrl+Shift+I");
+                    ui.end_row();
+
+                    ui.label("Universal Command Palette");
+                    ui.monospace("Ctrl+K / Cmd+K");
                     ui.end_row();
                 });
                 ui.add_space(8.0);
@@ -3057,6 +3690,331 @@ impl eframe::App for DitherCraftApp {
             });
         }
 
+        // Universal Command Palette Modal (Ctrl+K / Cmd+K)
+        if self.show_command_palette {
+            let catalog = self.build_command_catalog();
+            let query = self.command_search_query.trim().to_lowercase();
+            let filtered: Vec<&CommandItem> = if query.is_empty() {
+                catalog.iter().take(40).collect()
+            } else {
+                catalog
+                    .iter()
+                    .filter(|item| {
+                        item.title.to_lowercase().contains(&query)
+                            || item.category.to_lowercase().contains(&query)
+                            || item.shortcut.map(|s| s.to_lowercase().contains(&query)).unwrap_or(false)
+                    })
+                    .take(50)
+                    .collect()
+            };
+
+            // Keyboard navigation inside command palette
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_command_palette = false;
+            }
+            if !filtered.is_empty() {
+                if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                    self.command_selected_index = (self.command_selected_index + 1).min(filtered.len().saturating_sub(1));
+                }
+                if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                    self.command_selected_index = self.command_selected_index.saturating_sub(1);
+                }
+            }
+            if self.command_selected_index >= filtered.len() && !filtered.is_empty() {
+                self.command_selected_index = filtered.len().saturating_sub(1);
+            }
+
+            let mut execute_item: Option<CommandActionKind> = None;
+            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !filtered.is_empty() {
+                execute_item = Some(filtered[self.command_selected_index].kind.clone());
+            }
+
+            egui::Window::new("command_palette_modal")
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0_f32, -80.0_f32))
+                .fixed_size(egui::vec2(580.0_f32, 420.0_f32))
+                .collapsible(false)
+                .resizable(false)
+                .title_bar(false)
+                .frame(egui::Frame::window(&ctx.style()).inner_margin(12.0_f32).rounding(8.0_f32))
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("🔍").size(18.0_f32));
+                        let text_edit = egui::TextEdit::singleline(&mut self.command_search_query)
+                            .hint_text("Search algorithms, presets, tools, exports, transforms (Ctrl+K)...")
+                            .font(egui::TextStyle::Heading)
+                            .desired_width(ui.available_width() - 36.0_f32);
+                        let response = ui.add(text_edit);
+                        response.request_focus();
+                        if response.changed() {
+                            self.command_selected_index = 0;
+                        }
+                        if ui.small_button("✕").on_hover_text("Close (Esc)").clicked() {
+                            self.show_command_palette = false;
+                        }
+                    });
+                    ui.separator();
+
+                    if filtered.is_empty() {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(32.0_f32);
+                            ui.label(egui::RichText::new("No matching commands or algorithms found").italics());
+                            ui.label("Try searching for: 'Floyd', 'Bayer', 'Game Boy', 'Mask', 'SVG', 'Rotate'");
+                            ui.add_space(32.0_f32);
+                        });
+                    } else {
+                        egui::ScrollArea::vertical().max_height(320.0_f32).show(ui, |ui| {
+                            for (idx, item) in filtered.iter().enumerate() {
+                                let is_selected = idx == self.command_selected_index;
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("[{}]", item.category)).monospace().color(Color32::from_rgb(140, 170, 210)));
+                                    let title_text = if is_selected {
+                                        egui::RichText::new(&item.title).strong().color(Color32::WHITE)
+                                    } else {
+                                        egui::RichText::new(&item.title)
+                                    };
+                                    let label_resp = ui.selectable_label(is_selected, title_text);
+                                    if let Some(sc) = item.shortcut {
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            ui.label(egui::RichText::new(sc).monospace().small().color(Color32::from_rgb(180, 180, 180)));
+                                        });
+                                    }
+                                    if label_resp.clicked() {
+                                        execute_item = Some(item.kind.clone());
+                                    }
+                                });
+                            }
+                        });
+                    }
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("↑/↓ Navigate   ↵ Select   Esc Dismiss").small().color(Color32::from_rgb(130, 130, 140)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new(format!("{} results", filtered.len())).small().color(Color32::from_rgb(130, 130, 140)));
+                        });
+                    });
+                });
+
+            if let Some(kind) = execute_item {
+                self.execute_command_action(kind, ctx);
+            }
+        }
+
+        // Parametric Tone Curves Workshop Modal
+        if self.show_curves_dialog {
+            let mut is_open = true;
+            let mut curve_changed = false;
+            let mut preview_changed = false;
+            egui::Window::new("Parametric Tone Curves Workshop").collapsible(false).resizable(false).open(&mut is_open).show(ctx, |ui| {
+                ui.heading("Monotonic Hermite Tone Curves");
+                ui.label("Fritsch-Carlson non-oscillating spline interpolation with 256-step LUT remapping.");
+                ui.add_space(4.0_f32);
+
+                // Preset buttons
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Linear (Identity)").clicked() {
+                        self.tone_curve.reset_linear();
+                        curve_changed = true;
+                    }
+                    if ui.button("S-Curve (High Contrast)").clicked() {
+                        self.tone_curve = ToneCurve::s_curve();
+                        curve_changed = true;
+                    }
+                    if ui.button("Negative (Invert)").clicked() {
+                        self.tone_curve = ToneCurve::invert();
+                        curve_changed = true;
+                    }
+                    if ui.button("Solarize").clicked() {
+                        self.tone_curve = ToneCurve::solarize();
+                        curve_changed = true;
+                    }
+                    if ui.button("↺ Reset").clicked() {
+                        self.tone_curve.reset_linear();
+                        curve_changed = true;
+                    }
+                });
+                ui.add_space(6.0_f32);
+
+                // Allocate 256x256 Canvas
+                let canvas_size = egui::vec2(256.0_f32, 256.0_f32);
+                let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::click_and_drag());
+                let rect = response.rect;
+
+                // 1. Draw Canvas Background
+                painter.rect_filled(rect, 4.0_f32, Color32::from_rgb(18, 18, 24));
+                painter.rect_stroke(rect, 4.0_f32, egui::Stroke::new(1.0_f32, Color32::from_rgb(60, 60, 75)));
+
+                // 2. Draw 25% Grid Lines
+                for step in 1..4 {
+                    let frac = step as f32 * 0.25_f32;
+                    let gx = rect.left() + frac * rect.width();
+                    let gy = rect.bottom() - frac * rect.height();
+                    painter.line_segment(
+                        [egui::pos2(gx, rect.top()), egui::pos2(gx, rect.bottom())],
+                        egui::Stroke::new(1.0_f32, Color32::from_rgb(35, 35, 48)),
+                    );
+                    painter.line_segment(
+                        [egui::pos2(rect.left(), gy), egui::pos2(rect.right(), gy)],
+                        egui::Stroke::new(1.0_f32, Color32::from_rgb(35, 35, 48)),
+                    );
+                }
+
+                // 3. Draw Source Image Luminance Histogram Background
+                if let Some(ref src) = self.source_image {
+                    let mut bins = [0u32; 64];
+                    let mut max_b = 1u32;
+                    for chunk in src.data.chunks_exact(12) {
+                        let lum = ((chunk[0] as u32 * 77 + chunk[1] as u32 * 150 + chunk[2] as u32 * 29) >> 8) as usize;
+                        let b_idx = (lum * 64 / 256).min(63);
+                        bins[b_idx] += 1;
+                        if bins[b_idx] > max_b {
+                            max_b = bins[b_idx];
+                        }
+                    }
+                    let bin_w = rect.width() / 64.0_f32;
+                    for (b_idx, &cnt) in bins.iter().enumerate() {
+                        let bh = (cnt as f32 / max_b as f32) * (rect.height() * 0.75_f32);
+                        let bar_r = egui::Rect::from_min_max(
+                            egui::pos2(rect.left() + b_idx as f32 * bin_w, rect.bottom() - bh),
+                            egui::pos2(rect.left() + (b_idx + 1) as f32 * bin_w, rect.bottom()),
+                        );
+                        painter.rect_filled(bar_r, 0.0_f32, Color32::from_rgba_unmultiplied(80, 140, 200, 30));
+                    }
+                }
+
+                // 4. Draw Identity Diagonal Reference Line
+                painter.line_segment(
+                    [egui::pos2(rect.left(), rect.bottom()), egui::pos2(rect.right(), rect.top())],
+                    egui::Stroke::new(1.0_f32, Color32::from_rgb(60, 60, 80)),
+                );
+
+                // 5. Draw Spline Curve from evaluated LUT
+                let lut = self.tone_curve.evaluate_lut();
+                let mut curve_pts = Vec::with_capacity(256);
+                for (in_val, &out_val) in lut.iter().enumerate() {
+                    let cx = rect.left() + (in_val as f32 / 255.0_f32) * rect.width();
+                    let cy = rect.bottom() - (out_val as f32 / 255.0_f32) * rect.height();
+                    curve_pts.push(egui::pos2(cx, cy));
+                }
+                painter.add(egui::Shape::line(curve_pts, egui::Stroke::new(2.5_f32, Color32::from_rgb(0, 210, 255))));
+
+                // 6. Draw Control Points
+                for (p_idx, p) in self.tone_curve.points.iter().enumerate() {
+                    let p_screen = egui::pos2(rect.left() + p.x * rect.width(), rect.bottom() - p.y * rect.height());
+                    let is_dragged = self.curves_dragged_point == Some(p_idx);
+                    let r = if is_dragged { 7.0_f32 } else { 5.0_f32 };
+                    painter.circle_filled(p_screen, r, if is_dragged { Color32::WHITE } else { Color32::from_rgb(0, 210, 255) });
+                    painter.circle_stroke(p_screen, r, egui::Stroke::new(1.5_f32, Color32::from_rgb(20, 20, 25)));
+                }
+
+                // 7. Handle Mouse / Touch Interactions
+                if let Some(pos) = response.hover_pos() {
+                    let norm_x = ((pos.x - rect.left()) / rect.width()).clamp(0.0_f32, 1.0_f32);
+                    let norm_y = ((rect.bottom() - pos.y) / rect.height()).clamp(0.0_f32, 1.0_f32);
+
+                    if response.drag_started() {
+                        let mut closest_idx = None;
+                        let mut closest_dist = 14.0_f32;
+                        for (p_idx, p) in self.tone_curve.points.iter().enumerate() {
+                            let screen_pos = egui::pos2(rect.left() + p.x * rect.width(), rect.bottom() - p.y * rect.height());
+                            let d = (screen_pos - pos).length();
+                            if d < closest_dist {
+                                closest_dist = d;
+                                closest_idx = Some(p_idx);
+                            }
+                        }
+                        if let Some(idx) = closest_idx {
+                            self.curves_dragged_point = Some(idx);
+                        } else if response.clicked() {
+                            self.tone_curve.set_point(norm_x, norm_y);
+                            curve_changed = true;
+                        }
+                    }
+
+                    if response.dragged()
+                        && let Some(idx) = self.curves_dragged_point
+                    {
+                        if idx == 0 {
+                            self.tone_curve.points[0].y = norm_y;
+                        } else if idx == self.tone_curve.points.len() - 1 {
+                            self.tone_curve.points[idx].y = norm_y;
+                        } else {
+                            self.tone_curve.points[idx].x = norm_x;
+                            self.tone_curve.points[idx].y = norm_y;
+                            self.tone_curve.points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+                        }
+                        preview_changed = true;
+                    }
+
+                    if response.drag_stopped() {
+                        self.curves_dragged_point = None;
+                        curve_changed = true;
+                    }
+
+                    // Right click to remove point
+                    if response.secondary_clicked() {
+                        let mut to_remove = None;
+                        for (p_idx, p) in self.tone_curve.points.iter().enumerate() {
+                            if p_idx > 0 && p_idx < self.tone_curve.points.len() - 1 {
+                                let screen_pos = egui::pos2(rect.left() + p.x * rect.width(), rect.bottom() - p.y * rect.height());
+                                if (screen_pos - pos).length() < 14.0_f32 {
+                                    to_remove = Some(p_idx);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(idx) = to_remove {
+                            self.tone_curve.remove_point(idx);
+                            curve_changed = true;
+                        }
+                    }
+                }
+
+                ui.add_space(6.0_f32);
+                ui.label(format!("Control Points: {} (Click to add, Right-click to remove)", self.tone_curve.points.len()));
+
+                // Numeric points readout
+                egui::ScrollArea::vertical().max_height(100.0_f32).show(ui, |ui| {
+                    egui::Grid::new("curve_points_grid").spacing([16.0_f32, 4.0_f32]).show(ui, |ui| {
+                        ui.label("Point");
+                        ui.label("Input (X)");
+                        ui.label("Output (Y)");
+                        ui.label("Action");
+                        ui.end_row();
+
+                        let mut remove_pt = None;
+                        for (p_idx, p) in self.tone_curve.points.iter().enumerate() {
+                            ui.label(format!("#{}", p_idx + 1));
+                            ui.label(format!("{:.0} ({:.2})", p.x * 255.0_f32, p.x));
+                            ui.label(format!("{:.0} ({:.2})", p.y * 255.0_f32, p.y));
+                            if p_idx > 0 && p_idx < self.tone_curve.points.len() - 1 {
+                                if ui.small_button("✕").on_hover_text("Delete point").clicked() {
+                                    remove_pt = Some(p_idx);
+                                }
+                            } else {
+                                ui.label("Endpoint");
+                            }
+                            ui.end_row();
+                        }
+                        if let Some(idx) = remove_pt {
+                            self.tone_curve.remove_point(idx);
+                            curve_changed = true;
+                        }
+                    });
+                });
+            });
+
+            if !is_open {
+                self.show_curves_dialog = false;
+            }
+
+            if curve_changed {
+                self.trigger_render();
+            } else if preview_changed {
+                self.trigger_render_preview();
+            }
+        }
+
         // Left Control Panel
         egui::SidePanel::left("control_panel").min_width(280.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -3095,6 +4053,16 @@ impl eframe::App for DitherCraftApp {
                     &mut changed,
                     &mut preview_changed,
                 );
+                ui.horizontal(|ui| {
+                    if ui.button("📈 Parametric Tone Curves...").on_hover_text("Open interactive monotonic Hermite tone curves workshop").clicked()
+                    {
+                        self.show_curves_dialog = true;
+                    }
+                    if !self.tone_curve.is_identity() && ui.button("↺ Reset Curve").on_hover_text("Reset tone curve to identity linear").clicked() {
+                        self.tone_curve.reset_linear();
+                        changed = true;
+                    }
+                });
             });
 
             // Workstation Tools, Masking & Selection
@@ -4582,5 +5550,215 @@ mod tests {
         let roundtrip_mask = sel.to_mask();
         assert_eq!(roundtrip_mask.width, 64);
         assert_eq!(roundtrip_mask.height, 64);
+    }
+
+    #[test]
+    fn test_command_palette_catalog_and_filtering() {
+        let (tx, _rx) = channel();
+        let app = DitherCraftApp {
+            source_image: None,
+            rendered_image: None,
+            texture: None,
+            selected_algo: "Floyd-Steinberg".into(),
+            algo_search_query: String::new(),
+            selected_palette_name: "Game Boy".into(),
+            active_palette: Palette::game_boy(),
+            tonal_cycle_step: 0,
+            glow_enabled: false,
+            glow_threshold: 180,
+            glow_radius: 4,
+            glow_intensity: 0.8,
+            chromatic_enabled: false,
+            chromatic_shift: 0,
+            chromatic_radial: false,
+            glitch_enabled: false,
+            glitch_mode: JpegSubMode::BlockShift,
+            glitch_intensity: 0.4,
+            crt_enabled: false,
+            crt_scanline: 0.0,
+            crt_barrel: 0.0,
+            crt_vignette: 0.0,
+            blur_enabled: false,
+            blur_sigma: 1.0,
+            sharpen_enabled: false,
+            sharpen_amount: 0.8,
+            temporal_noise_enabled: false,
+            temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
+            temporal_intensity: 0.5,
+            frame_counter: 0,
+            theme: StudioTheme::StudioDark,
+            debounce_mode: false,
+            status_text: "Ready".into(),
+            render_latency_ms: 0.0,
+            telemetry_dither_ms: 0.0,
+            telemetry_effects_ms: 0.0,
+            telemetry_histogram_ms: 0.0,
+            show_telemetry_hud: false,
+            split_view_enabled: false,
+            split_mode: SplitViewMode::default(),
+            split_position: 0.5,
+            split_checker_tile_size: 32,
+            is_playing: false,
+            target_fps: 30,
+            loop_mode: true,
+            timeline_frame: 0,
+            timeline_max_frames: 60,
+            last_frame_instant: Instant::now(),
+            source_frames: Vec::new(),
+            frame_delays: Vec::new(),
+            fine_wheel_increment: false,
+            logo_texture: None,
+            show_about: false,
+            canvas_pan: egui::Vec2::ZERO,
+            canvas_zoom: 1.0,
+            show_pixel_grid: true,
+            swatch_percentages: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            render_generation: Arc::new(AtomicU64::new(0)),
+            egui_ctx: egui::Context::default(),
+            tx,
+            rx: _rx,
+            is_rendering: false,
+            show_batch_studio: false,
+            batch_input_dir: String::new(),
+            batch_output_dir: String::new(),
+            batch_status_msg: "Ready".into(),
+            batch_progress: 0.0,
+            batch_is_running: false,
+            audio_track: None,
+            audio_spectrum: AudioSpectrum::default(),
+            audio_reactive_enabled: false,
+            source_path: None,
+            recent_files: Vec::new(),
+            snapshots: [None, None, None, None],
+            show_loupe: false,
+            show_shortcuts_dialog: false,
+            levels_black: 0,
+            levels_white: 255,
+            levels_gamma: 1.0,
+            cvd_mode: CvdMode::Normal,
+            aspect_guide: RetroAspectGuide::None,
+            show_preset_gallery: false,
+            show_harmonies_dialog: false,
+            harmony_base_rgb: [255, 90, 30],
+            harmony_mode: ColorHarmony::Triadic,
+            harmony_count: 6,
+            lut_enabled: false,
+            lut_preset_name: "Technicolor 2-Strip".into(),
+            custom_lut: None,
+            cmyk_dot_shape: HalftoneDotShape::EuclideanRound,
+            cmyk_dot_gain: 0.0,
+            tonal_shadow_algo: "Bayer 8x8".into(),
+            tonal_mid_algo: "Floyd-Steinberg".into(),
+            tonal_highlight_algo: "Atkinson".into(),
+            tonal_shadow_threshold: 85,
+            tonal_highlight_threshold: 170,
+            tonal_feather: 16,
+            custom_matrix: CustomMatrixDither::default(),
+            cadence_mode: CadenceMode::default(),
+            onion_skin_enabled: false,
+            onion_skin_config: OnionSkinConfig::default(),
+            rd_morphology: ReactionDiffusionMorphology::default(),
+            rd_steps: 60,
+            flow_scale: 0.04,
+            flow_swirl: 1.5,
+            crop_dialog_open: false,
+            crop_x: 0,
+            crop_y: 0,
+            crop_width: 256,
+            crop_height: 256,
+            temporal_coherence_enabled: false,
+            temporal_coherence_damping: 0.65,
+            temporal_coherence_threshold: 0.06,
+            last_rendered_source: None,
+            last_rendered_output: None,
+            effect_stack: EffectStack::default_stack(),
+            active_tool: WorkstationTool::Pointer,
+            brush_radius: 24.0,
+            brush_falloff: 0.5,
+            mask: None,
+            mask_blend_enabled: false,
+            secondary_algo: "Atkinson".into(),
+            quick_mask_active: false,
+            selection: None,
+            selection_mode: SelectionMode::New,
+            wand_tolerance: 0.12,
+            lasso_points: Vec::new(),
+            drag_start_pixel: None,
+            drag_current_pixel: None,
+            marching_ants_phase: 0.0,
+            tone_curve: ToneCurve::linear(),
+            show_curves_dialog: false,
+            curves_dragged_point: None,
+            show_command_palette: false,
+            command_search_query: String::new(),
+            command_selected_index: 0,
+        };
+
+        let catalog = app.build_command_catalog();
+        assert!(catalog.len() >= 80, "Catalog should have at least 80 commands, got {}", catalog.len());
+
+        // Test filtering by query
+        let bayer_matches: Vec<_> = catalog.iter().filter(|c| c.title.to_lowercase().contains("bayer")).collect();
+        assert!(!bayer_matches.is_empty(), "Should match Bayer algorithms");
+
+        let mask_matches: Vec<_> = catalog.iter().filter(|c| c.title.to_lowercase().contains("mask") || c.category == "Mask").collect();
+        assert!(mask_matches.len() >= 5, "Should match multiple mask commands");
+
+        let preset_matches: Vec<_> = catalog.iter().filter(|c| c.category == "Preset").collect();
+        assert_eq!(preset_matches.len(), StudioPreset::bundled_presets().len());
+    }
+
+    #[test]
+    fn test_tone_curve_studio_preset_roundtrip() {
+        let mut curve = ToneCurve::s_curve();
+        assert!(!curve.is_identity());
+        curve.set_point(0.5, 0.45);
+        assert_eq!(curve.points.len(), 5);
+
+        let preset = StudioPreset {
+            name: "Curve Test".into(),
+            algo: "Bayer 4x4".into(),
+            palette_name: "Monochrome".into(),
+            metric: ColorMetric::EuclideanRgb,
+            tonal_cycle_step: 0,
+            levels_black: 10,
+            levels_white: 240,
+            levels_gamma: 1.1,
+            cvd_mode: CvdMode::Normal,
+            lut_enabled: false,
+            lut_preset: "Technicolor 2-Strip".into(),
+            tone_curve: Some(curve.clone()),
+            glow_enabled: false,
+            glow_threshold: 180,
+            glow_radius: 4,
+            glow_intensity: 0.8,
+            chromatic_enabled: false,
+            chromatic_shift: 0,
+            chromatic_radial: false,
+            glitch_enabled: false,
+            glitch_mode: JpegSubMode::BlockShift,
+            glitch_intensity: 0.4,
+            crt_enabled: false,
+            crt_scanline: 0.0,
+            crt_barrel: 0.0,
+            crt_vignette: 0.0,
+            blur_enabled: false,
+            blur_sigma: 1.0,
+            sharpen_enabled: false,
+            sharpen_amount: 0.8,
+            temporal_enabled: false,
+            temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
+            temporal_intensity: 0.5,
+        };
+
+        let json = serde_json::to_string(&preset).expect("serialize preset with curve");
+        let de: StudioPreset = serde_json::from_str(&json).expect("deserialize preset with curve");
+        assert_eq!(de.name, "Curve Test");
+        assert!(de.tone_curve.is_some());
+        let de_curve = de.tone_curve.unwrap();
+        assert_eq!(de_curve.points.len(), 5);
+        assert!((de_curve.points[2].x - 0.5).abs() < 1e-4);
     }
 }

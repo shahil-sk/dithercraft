@@ -14,6 +14,7 @@ pub mod audio;
 pub mod buffer;
 pub mod color;
 pub mod color_depth;
+pub mod curves;
 pub mod effects;
 pub mod error;
 pub mod ffi;
@@ -34,6 +35,7 @@ pub use audio::{AudioSpectrum, AudioTrack};
 pub use buffer::{HilbertCurve, ImageBuffer, ImageBufferPool};
 pub use color::{ColorHarmony, CvdMode, LabColor, OklabColor, OklchColor, RgbColor};
 pub use color_depth::{LuminosityMapping, MismatchMode};
+pub use curves::{CurvePoint, ToneCurve};
 pub use effects::{
     BlendMode, ChromaticAberration, EffectKind, EffectNode, EffectStack, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen,
     VintageCrtSimulation,
