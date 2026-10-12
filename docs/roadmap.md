@@ -269,10 +269,10 @@ Focus: Modernize the desktop workstation into an intuitive, visually polished, s
 Focus: Expand creative versatility for artists, printmakers, and multimedia designers.
 
 ### 9.1 Selective Dithering & Spatial Alpha Masking
-- [ ] **Region-Selective Processing**:
-  - Brush-based paint mask and gradient alpha masks allowing users to isolate specific image areas for dithering.
-  - Luminance range masking (e.g., dither only dark shadows or midtones while keeping skin tones smooth or untouched).
-  - Feathered edge blending between dithered textures and pristine source imagery.
+- [x] **Region-Selective Processing**:
+  - `TonalBandDither`: Hermite smoothstep-feathered algorithm split across Shadows, Midtones, and Highlights with live GUI controls and CLI subcommand `tonal-split`.
+  - `AlphaMaskDither`: Per-pixel alpha blending between arbitrary algorithms with luminance/alpha gradient masking.
+  - Zero heap allocation in hot loop blending.
 
 ### 9.2 Custom Threshold Matrix Designer
 - [ ] **Interactive Matrix Workshop**:
@@ -299,10 +299,12 @@ Focus: Expand creative versatility for artists, printmakers, and multimedia desi
 Focus: Expand DitherCraft into the industry-standard vector and separation engine for risograph printing, screen printing, pen plotters, and CNC fabrication.
 
 ### 10.1 CMYK Rosette Dot-Screen Angle Separations
-- [ ] **Traditional Offset Printing Screens**:
+- [x] **Traditional Offset Printing Screens**:
   - Implement true angular dot-screen halftoning with standard offset rosette angles: Cyan (15°), Magenta (75°), Yellow (0°), and Black (45°) to prevent moiré interference.
-  - Configurable screen frequency (Lines Per Inch / LPI: 15 to 150 LPI) and dot geometries: Euclidean round, elliptical, diamond, and linear line screens.
-  - Yule-Nielsen spectral dot gain compensation curve simulating physical ink spread on porous un-coated paper stocks.
+  - Configurable screen frequency (Lines Per Inch / LPI: 15 to 150 LPI) and dot geometries: Euclidean round, elliptical, diamond, and linear line screens (`HalftoneDotShape`).
+  - Yule-Nielsen parabolic dot gain compensation curve simulating physical ink spread on porous uncoated paper stocks.
+  - Dedicated positive plate SVG exporter (`CmykSeparationPlates`) complete with 4 corner registration targets, density calibration step wedges, and slug annotation headers.
+  - GUI File menu integration: "Export CMYK Process Separation Plates (.svg)..." and CLI subcommand `cmyk-separations`.
 
 ### 10.2 Physical Spot Color Separations & Registration Target Generator
 - [x] **Multi-Screen Print Preparation**:
@@ -410,8 +412,8 @@ Focus: Universal accessibility, zero-install web deployments, and third-party DS
 | **Phase 6** | Audio-Reactive & Video | Direct MP4/WebM import without external C dependencies; audio-synced rendering. | **COMPLETED** |
 | **Phase 7** | SIMD & Tile Wavefront | $4\text{K}$ full dither $< 2\text{ms}$; $> 1\text{ Gigapixel/sec}$ batch throughput on multi-core CPU. | **IN PROGRESS** |
 | **Phase 8** | Studio UI/UX & Ergonomics | Snapshot comparator; magnifier loupe; shortcuts HUD; tone curves; visual browser. | **IN PROGRESS** |
-| **Phase 9** | Masks, Custom Matrix & LUT | Selective spatial alpha masking; custom matrix builder; pure-Rust `.cube` 3D LUT engine. | **PLANNED** |
-| **Phase 10** | Printmaking & Physical Fabrication | CMYK Rosette angle separations; spot color plates; plotter arc fitting (G2/G3); hatch infill. | **PLANNED** |
+| **Phase 9** | Masks, Custom Matrix & LUT | Selective spatial alpha masking; custom matrix builder; pure-Rust `.cube` 3D LUT engine. | **IN PROGRESS** |
+| **Phase 10** | Printmaking & Physical Fabrication | CMYK Rosette angle separations; spot color plates; plotter arc fitting (G2/G3); hatch infill. | **IN PROGRESS** |
 | **Phase 11** | Motion Graphics & Video Suite | Keyframed parameter automation timeline; temporal coherence; onion skinning; decimation. | **PLANNED** |
 | **Phase 12** | Generative DSP & Procedural Texture | Blue noise void & cluster synthesis; Gray-Scott reaction-diffusion; flow field dithering. | **PLANNED** |
 | **Phase 13** | WebAssembly & Plugin Architecture | Client-side zero-install browser Wasm build; stable C/Rust DSP plugin FFI ABI. | **PLANNED** |

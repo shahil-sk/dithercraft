@@ -1,7 +1,8 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use dither_core::{
-    AudioSpectrum, AudioTrack, Cube3dLut, ImageBuffer, Mp4Demuxer, WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
+    AudioSpectrum, AudioTrack, CmykHalftone, Cube3dLut, HalftoneDotShape, ImageBuffer, Mp4Demuxer, TonalBandDither, WebmDemuxer, WebpAnimFrame,
+    WebpAnimationMuxer,
     algorithms::*,
     color::{ColorHarmony, CvdMode, RgbColor},
     effects::*,
@@ -523,6 +524,18 @@ pub struct DitherCraftApp {
     lut_enabled: bool,
     lut_preset_name: String,
     custom_lut: Option<Cube3dLut>,
+
+    // Phase 10: CMYK Rosette Screen & Separation Plates
+    cmyk_dot_shape: HalftoneDotShape,
+    cmyk_dot_gain: f32,
+
+    // Phase 9: Selective Tonal Band Multi-Dither
+    tonal_shadow_algo: String,
+    tonal_mid_algo: String,
+    tonal_highlight_algo: String,
+    tonal_shadow_threshold: u8,
+    tonal_highlight_threshold: u8,
+    tonal_feather: u8,
 }
 
 impl DitherCraftApp {
@@ -665,6 +678,16 @@ impl DitherCraftApp {
             lut_enabled: false,
             lut_preset_name: "Technicolor 2-Strip".into(),
             custom_lut: None,
+
+            cmyk_dot_shape: HalftoneDotShape::EuclideanRound,
+            cmyk_dot_gain: 0.0,
+
+            tonal_shadow_algo: "Bayer 8x8".into(),
+            tonal_mid_algo: "Floyd-Steinberg".into(),
+            tonal_highlight_algo: "Atkinson".into(),
+            tonal_shadow_threshold: 85,
+            tonal_highlight_threshold: 170,
+            tonal_feather: 16,
         }
     }
 
@@ -1081,6 +1104,15 @@ impl DitherCraftApp {
         let levels_gamma = self.levels_gamma;
         let cvd_mode = self.cvd_mode;
 
+        let cmyk_dot_shape = self.cmyk_dot_shape;
+        let cmyk_dot_gain = self.cmyk_dot_gain;
+        let tonal_shadow_algo = self.tonal_shadow_algo.clone();
+        let tonal_mid_algo = self.tonal_mid_algo.clone();
+        let tonal_highlight_algo = self.tonal_highlight_algo.clone();
+        let tonal_shadow_threshold = self.tonal_shadow_threshold;
+        let tonal_highlight_threshold = self.tonal_highlight_threshold;
+        let tonal_feather = self.tonal_feather;
+
         self.is_rendering = true;
         let gen_id = self.render_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cancel_token = self.render_generation.clone();
@@ -1093,7 +1125,20 @@ impl DitherCraftApp {
             }
 
             let t_dither = Instant::now();
-            let algo: Box<dyn DitherAlgorithm> = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
+            let algo: Box<dyn DitherAlgorithm> = if algo_name.to_lowercase().contains("cmyk") {
+                Box::new(CmykHalftone { dot_shape: cmyk_dot_shape, dot_gain: cmyk_dot_gain, ..Default::default() })
+            } else if algo_name.to_lowercase().contains("tonal band") {
+                Box::new(TonalBandDither::new(
+                    tonal_shadow_threshold,
+                    tonal_highlight_threshold,
+                    tonal_feather,
+                    create_algorithm(&tonal_shadow_algo).unwrap_or_else(|| Box::new(Bayer8x8)),
+                    create_algorithm(&tonal_mid_algo).unwrap_or_else(|| Box::new(FloydSteinberg::default())),
+                    create_algorithm(&tonal_highlight_algo).unwrap_or_else(|| Box::new(Atkinson::default())),
+                ))
+            } else {
+                create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()))
+            };
 
             let mut input_buf = (*source).clone();
             if let Some(ref lut) = lut_opt {
@@ -1840,6 +1885,27 @@ impl eframe::App for DitherCraftApp {
                         ui.close_menu();
                     }
 
+                    if ui.button("Export CMYK Process Separation Plates (.svg)...").clicked() {
+                        let pick_target = self
+                            .source_image
+                            .as_ref()
+                            .map(|s| (**s).clone())
+                            .or_else(|| self.rendered_image.clone())
+                            .and_then(|img| rfd::FileDialog::new().pick_folder().map(|dir| (img, dir)));
+                        if let Some((img, dir)) = pick_target {
+                            let cmyk = CmykHalftone { dot_shape: self.cmyk_dot_shape, dot_gain: self.cmyk_dot_gain, ..Default::default() };
+                            if let Ok(seps) = cmyk.generate_separations(&img)
+                                && let Ok(plates) = seps.export_all_svg_plates(&cmyk, 30.0, 1.0)
+                            {
+                                for (filename, content) in &plates {
+                                    let _ = std::fs::write(dir.join(filename), content);
+                                }
+                                self.status_text = format!("Exported 4 CMYK process separation plates to {}", dir.display());
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
                     ui.separator();
 
                     if ui.button("Batch Processing Studio...").clicked() {
@@ -2447,12 +2513,101 @@ impl eframe::App for DitherCraftApp {
                     .collect();
 
                 egui::ComboBox::from_id_salt("algo_picker").width(240.0).selected_text(&self.selected_algo).show_ui(ui, |ui| {
+                    if (query.is_empty() || "tonal band multi-dither".contains(&query))
+                        && ui.selectable_value(&mut self.selected_algo, "Tonal Band Multi-Dither".into(), "Tonal Band Multi-Dither").clicked()
+                    {
+                        changed = true;
+                    }
                     for info in filtered {
                         if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
                             changed = true;
                         }
                     }
                 });
+
+                if self.selected_algo.to_lowercase().contains("cmyk") {
+                    ui.separator();
+                    ui.label("CMYK Rosette Halftone Controls:");
+                    ui.horizontal(|ui| {
+                        ui.label("Dot Shape:");
+                        egui::ComboBox::from_id_salt("cmyk_dot_shape")
+                            .selected_text(match self.cmyk_dot_shape {
+                                HalftoneDotShape::EuclideanRound => "Euclidean Round",
+                                HalftoneDotShape::Elliptical => "Elliptical",
+                                HalftoneDotShape::Diamond => "Diamond",
+                                HalftoneDotShape::Line => "Line",
+                            })
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::EuclideanRound, "Euclidean Round").clicked() {
+                                    changed = true;
+                                }
+                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Elliptical, "Elliptical").clicked() {
+                                    changed = true;
+                                }
+                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Diamond, "Diamond").clicked() {
+                                    changed = true;
+                                }
+                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Line, "Line").clicked() {
+                                    changed = true;
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Dot Gain:");
+                        let slider = egui::Slider::new(&mut self.cmyk_dot_gain, -0.2..=0.4)
+                            .text("% gain")
+                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0));
+                        check_slider(ui, slider, &mut changed, &mut preview_changed);
+                    });
+                }
+
+                if self.selected_algo.to_lowercase().contains("tonal band") {
+                    ui.separator();
+                    ui.label("Tonal Band Multi-Dither Controls:");
+                    ui.horizontal(|ui| {
+                        ui.label("Shadows:");
+                        egui::ComboBox::from_id_salt("tonal_shadow_algo").selected_text(&self.tonal_shadow_algo).show_ui(ui, |ui| {
+                            for name in ["Bayer 8x8", "Bayer 4x4", "Floyd-Steinberg", "Atkinson", "Stucki", "Jarvis-Judice-Ninke"] {
+                                if ui.selectable_value(&mut self.tonal_shadow_algo, name.into(), name).clicked() {
+                                    changed = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Midtones:");
+                        egui::ComboBox::from_id_salt("tonal_mid_algo").selected_text(&self.tonal_mid_algo).show_ui(ui, |ui| {
+                            for name in ["Floyd-Steinberg", "Atkinson", "Burkes", "Sierra-3", "Bayer 8x8", "Interleaved Gradient Noise"] {
+                                if ui.selectable_value(&mut self.tonal_mid_algo, name.into(), name).clicked() {
+                                    changed = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Highlights:");
+                        egui::ComboBox::from_id_salt("tonal_hi_algo").selected_text(&self.tonal_highlight_algo).show_ui(ui, |ui| {
+                            for name in ["Atkinson", "Floyd-Steinberg", "Bayer 4x4", "Bayer 8x8", "Ostromoukhov", "Riemersma"] {
+                                if ui.selectable_value(&mut self.tonal_highlight_algo, name.into(), name).clicked() {
+                                    changed = true;
+                                }
+                            }
+                        });
+                    });
+                    check_slider(
+                        ui,
+                        egui::Slider::new(&mut self.tonal_shadow_threshold, 10..=128).text("Shadow Split"),
+                        &mut changed,
+                        &mut preview_changed,
+                    );
+                    check_slider(
+                        ui,
+                        egui::Slider::new(&mut self.tonal_highlight_threshold, 129..=245).text("Highlight Split"),
+                        &mut changed,
+                        &mut preview_changed,
+                    );
+                    check_slider(ui, egui::Slider::new(&mut self.tonal_feather, 2..=48).text("Feathering"), &mut changed, &mut preview_changed);
+                }
             });
 
             // Palette Controls & Color Science

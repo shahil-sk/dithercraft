@@ -4,6 +4,7 @@ pub mod error_diffusion;
 pub mod halftone;
 pub mod modulation;
 pub mod ordered;
+pub mod spatial_mask;
 pub mod traits;
 
 pub use artistic::{EtchingCrosshatch, MatrixGlitchDispersion, Mezzotint, NewsprintGrain, Stippling, WoodcutSimulation};
@@ -20,6 +21,7 @@ pub use ordered::{
     Bayer2x2, Bayer4x4, Bayer8x8, Bayer16x16, CentralWhitePoint, Checkerboard45, ClusteredDot4x4, ClusteredDot8x8, DiagonalLines, DispersedDot,
     HorizontalLines, InterleavedGradientNoise, Spiral, VerticalLines,
 };
+pub use spatial_mask::{AlphaMaskDither, TonalBandDither};
 pub use traits::DitherAlgorithm;
 
 /// Canonical classification of the 6 major mathematical algorithm families.
@@ -212,6 +214,9 @@ pub fn create_algorithm(name: &str) -> Option<Box<dyn DitherAlgorithm>> {
         "poptone" => Some(Box::new(crate::renderers::PopTone::default())),
         "luminositymapping" => Some(Box::new(crate::color_depth::LuminosityMapping::default())),
         "colordepthmismatch" | "mismatch" => Some(Box::new(crate::color_depth::MismatchMode::default())),
+        "tonalbandmultidither" | "tonalband" => {
+            Some(Box::new(TonalBandDither::new(85, 170, 16, Box::new(Bayer8x8), Box::new(FloydSteinberg::default()), Box::new(Atkinson::default()))))
+        }
 
         _ => None,
     }

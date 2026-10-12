@@ -783,6 +783,24 @@ impl Palette {
         let colors = hexes.into_iter().filter_map(RgbColor::from_hex).collect();
         Self::new("PICO-8", colors).unwrap_or_else(|_| Self::monochrome())
     }
+
+    /// Standard 8-color CMYK process printmaking palette.
+    pub fn cmyk_process() -> Self {
+        Self {
+            name: "CMYK Process".into(),
+            swatches: vec![
+                Swatch::new(RgbColor::new(255, 255, 255), false),
+                Swatch::new(RgbColor::new(0, 255, 255), false),
+                Swatch::new(RgbColor::new(255, 0, 255), false),
+                Swatch::new(RgbColor::new(255, 255, 0), false),
+                Swatch::new(RgbColor::new(255, 0, 0), false),
+                Swatch::new(RgbColor::new(0, 255, 0), false),
+                Swatch::new(RgbColor::new(0, 0, 255), false),
+                Swatch::new(RgbColor::new(0, 0, 0), false),
+            ],
+            metric: ColorMetric::default(),
+        }
+    }
 }
 
 /// 3D KD-Tree for O(log K) accelerated nearest neighbor search in RGB color space.

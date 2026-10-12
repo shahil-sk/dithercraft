@@ -568,3 +568,87 @@ fn test_spot_color_plate_separation() {
     assert!(plate1_svg.contains("Density Calibration Step Wedge"));
     assert!(plate1_svg.contains(r##"fill="#000000""##));
 }
+
+#[test]
+fn test_cmyk_halftone_separations_and_dot_shapes() {
+    use dither_core::renderers::{CmykHalftone, HalftoneDotShape};
+
+    let mut buf = ImageBuffer::new(16, 16).expect("buf");
+    for y in 0..16 {
+        for x in 0..16 {
+            let r = (x * 16) as u8;
+            let g = (y * 16) as u8;
+            let b = 128u8;
+            buf.set_pixel(x, y, RgbColor::new(r, g, b));
+        }
+    }
+
+    let cmyk = CmykHalftone { frequency: 0.20, dot_shape: HalftoneDotShape::Elliptical, dot_gain: 0.15, ..Default::default() };
+
+    let pal = Palette::cmyk_process();
+    let dithered = cmyk.apply(&buf, &pal).expect("cmyk apply");
+    assert_eq!(dithered.width, 16);
+    assert_eq!(dithered.height, 16);
+
+    let seps = cmyk.generate_separations(&buf).expect("seps");
+    assert_eq!(seps.cyan.width, 16);
+    assert_eq!(seps.magenta.width, 16);
+    assert_eq!(seps.yellow.width, 16);
+    assert_eq!(seps.black.width, 16);
+
+    let svg_plates = seps.export_all_svg_plates(&cmyk, 25.0, 1.0).expect("svg plates");
+    assert_eq!(svg_plates.len(), 4);
+    assert_eq!(svg_plates[0].0, "plate_cmyk_01_cyan.svg");
+    assert_eq!(svg_plates[1].0, "plate_cmyk_02_magenta.svg");
+    assert_eq!(svg_plates[2].0, "plate_cmyk_03_yellow.svg");
+    assert_eq!(svg_plates[3].0, "plate_cmyk_04_black.svg");
+
+    let cyan_svg = &svg_plates[0].1;
+    assert!(cyan_svg.contains("PLATE 1/4: CYAN"));
+    assert!(cyan_svg.contains("15.0° ROSETTE SCREEN"));
+    assert!(cyan_svg.contains("Registration Targets"));
+    assert!(cyan_svg.contains("Density Calibration Step Wedge"));
+}
+
+#[test]
+fn test_spatial_tonal_band_dithering() {
+    use dither_core::algorithms::{AlphaMaskDither, Atkinson, Bayer8x8, FloydSteinberg, TonalBandDither};
+
+    let mut buf = ImageBuffer::new(32, 32).expect("buf");
+    for y in 0..32 {
+        for x in 0..32 {
+            let gray = (x * 8) as u8;
+            buf.set_pixel(x, y, RgbColor::new(gray, gray, gray));
+        }
+    }
+
+    let pal = Palette::monochrome();
+
+    let tonal = TonalBandDither::new(85, 170, 16, Box::new(Bayer8x8), Box::new(FloydSteinberg::default()), Box::new(Atkinson::default()));
+
+    let out = tonal.apply(&buf, &pal).expect("tonal dither");
+    assert_eq!(out.width, 32);
+    assert_eq!(out.height, 32);
+
+    let (ws, _wm, wh) = tonal.compute_weights(10);
+    assert!(ws > 0.9);
+    assert!(wh < 0.1);
+
+    let (ws_hi, _wm_hi, wh_hi) = tonal.compute_weights(240);
+    assert!(wh_hi > 0.9);
+    assert!(ws_hi < 0.1);
+
+    // Test Alpha Mask Dither
+    let mut mask = ImageBuffer::new(32, 32).expect("mask");
+    for y in 0..32 {
+        for x in 0..32 {
+            let val = if x < 16 { 255 } else { 0 };
+            mask.set_pixel(x, y, RgbColor::new(val, val, val));
+        }
+    }
+
+    let alpha_dither = AlphaMaskDither::new(Box::new(FloydSteinberg::default()), Box::new(Bayer8x8), mask);
+    let alpha_out = alpha_dither.apply(&buf, &pal).expect("alpha dither");
+    assert_eq!(alpha_out.width, 32);
+    assert_eq!(alpha_out.height, 32);
+}

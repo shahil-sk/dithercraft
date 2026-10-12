@@ -153,6 +153,44 @@ enum Commands {
         #[arg(long, default_value_t = 30.0)]
         margin: f32,
     },
+    /// Export process separation positive plates (.svg) for 4-color CMYK offset printing
+    CmykSeparations {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 6.0)]
+        freq: f32,
+        #[arg(long, default_value = "round")]
+        dot_shape: String,
+        #[arg(long, default_value_t = 0.0)]
+        gain: f32,
+        #[arg(long, default_value_t = 1.0)]
+        pixel_size: f32,
+        #[arg(long, default_value_t = 30.0)]
+        margin: f32,
+    },
+    /// Apply selective tonal band dithering (distinct algorithms for shadows, midtones, highlights)
+    TonalSplit {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value = "bayer8x8")]
+        shadow_algo: String,
+        #[arg(long, default_value = "floyd-steinberg")]
+        mid_algo: String,
+        #[arg(long, default_value = "atkinson")]
+        hi_algo: String,
+        #[arg(short, long, default_value = "monochrome")]
+        palette: String,
+        #[arg(long, default_value_t = 85)]
+        shadow_threshold: u8,
+        #[arg(long, default_value_t = 170)]
+        highlight_threshold: u8,
+        #[arg(long, default_value_t = 16)]
+        feather: u8,
+    },
     /// Run Model Context Protocol (MCP) JSON-RPC server over stdio
     Mcp,
     /// Run internal latency and throughput micro-benchmarks
@@ -208,6 +246,15 @@ fn select_temporal_pattern(name: &str) -> Option<TemporalNoisePattern> {
         "bayerphasestepping" | "bayerstep" => Some(TemporalNoisePattern::BayerPhaseStepping),
         "bluenoisetemporaljitter" | "bluenoise" | "jitter" => Some(TemporalNoisePattern::BlueNoiseTemporalJitter),
         _ => None,
+    }
+}
+
+fn select_dot_shape(name: &str) -> HalftoneDotShape {
+    match name.to_lowercase().as_str() {
+        "elliptical" | "ellipse" => HalftoneDotShape::Elliptical,
+        "diamond" => HalftoneDotShape::Diamond,
+        "line" => HalftoneDotShape::Line,
+        _ => HalftoneDotShape::EuclideanRound,
     }
 }
 
@@ -606,6 +653,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let elapsed = start.elapsed();
             println!("Exported {} spot color plates to {} in {:.2}ms", plates.len(), output_dir.display(), elapsed.as_secs_f64() * 1000.0);
+        }
+
+        Commands::CmykSeparations { input, output_dir, freq, dot_shape, gain, pixel_size, margin } => {
+            let start = Instant::now();
+            let img = load_image(&input)?;
+            let shape = select_dot_shape(&dot_shape);
+            let cmyk = CmykHalftone { frequency: freq, dot_shape: shape, dot_gain: gain, ..Default::default() };
+
+            let seps = cmyk.generate_separations(&img)?;
+            std::fs::create_dir_all(&output_dir)?;
+            let plates = seps.export_all_svg_plates(&cmyk, margin, pixel_size)?;
+            for (filename, svg_data) in &plates {
+                let out_file = output_dir.join(filename);
+                std::fs::write(&out_file, svg_data)?;
+            }
+            let elapsed = start.elapsed();
+            println!(
+                "Exported 4 CMYK separation plates (shape: {:?}, gain: {:.1}%) to {} in {:.2}ms",
+                shape,
+                gain * 100.0,
+                output_dir.display(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+
+        Commands::TonalSplit { input, output, shadow_algo, mid_algo, hi_algo, palette, shadow_threshold, highlight_threshold, feather } => {
+            let start = Instant::now();
+            let img = load_image(&input)?;
+            let pal = select_palette(&palette);
+            let shadow = select_algorithm(&shadow_algo);
+            let mid = select_algorithm(&mid_algo);
+            let highlight = select_algorithm(&hi_algo);
+
+            let tonal = TonalBandDither::new(shadow_threshold, highlight_threshold, feather, shadow, mid, highlight);
+            let dithered = tonal.apply(&img, &pal)?;
+            save_image(&output, &dithered)?;
+            let elapsed = start.elapsed();
+            println!(
+                "Successfully applied tonal split (shadows: {}, mids: {}, highlights: {}) to {} -> {} in {:.2}ms",
+                shadow_algo,
+                mid_algo,
+                hi_algo,
+                input.display(),
+                output.display(),
+                elapsed.as_secs_f64() * 1000.0
+            );
         }
 
         Commands::Mcp => {

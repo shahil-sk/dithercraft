@@ -33,7 +33,7 @@ pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore
 pub use error::DitherError;
 pub use lut::Cube3dLut;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
-pub use renderers::{CmykHalftone, PopTone};
+pub use renderers::{CmykChannel, CmykHalftone, CmykSeparationPlates, HalftoneDotShape, PopTone};
 pub use temporal::{AnimatedFrame, AnimationSequence, Interpolation, Keyframe, LfoModulator, LfoWaveform, TemporalNoisePattern, TimelineTrack};
 pub use vector::{
     BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, SpotColorPlateSeparation, ToolpathStroke,
