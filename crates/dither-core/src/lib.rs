@@ -19,8 +19,10 @@ pub mod error;
 pub mod ffi;
 pub mod generative;
 pub mod lut;
+pub mod mask;
 pub mod palette;
 pub mod renderers;
+pub mod selection;
 pub mod shaders;
 pub mod simd;
 pub mod temporal;
@@ -42,8 +44,10 @@ pub use generative::{
     ReactionDiffusionSimulator,
 };
 pub use lut::Cube3dLut;
+pub use mask::MaskBuffer;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykChannel, CmykHalftone, CmykSeparationPlates, HalftoneDotShape, PopTone};
+pub use selection::{SelectionBuffer, SelectionMode};
 pub use simd::{quantize_batch_8, quantize_buffer_simd};
 pub use temporal::{
     AnimatedFrame, AnimationSequence, CadenceMode, Interpolation, Keyframe, LfoModulator, LfoWaveform, OnionSkinConfig, TemporalNoisePattern,

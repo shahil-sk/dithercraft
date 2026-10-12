@@ -7,7 +7,9 @@ use dither_core::{
     algorithms::*,
     color::{ColorHarmony, CvdMode, RgbColor},
     effects::*,
+    mask::MaskBuffer,
     palette::{ColorMetric, Palette, Swatch},
+    selection::{SelectionBuffer, SelectionMode},
     temporal::{TemporalCoherenceConfig, TemporalCoherenceFilter, TemporalNoisePattern, render_onion_skin},
     vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, SpotColorPlateSeparation, export_smooth_bezier_svg},
 };
@@ -140,6 +142,36 @@ impl RetroAspectGuide {
             Self::ArcadeTate => Some(3.0 / 4.0),
             Self::Square => Some(1.0),
             Self::Widescreen => Some(16.0 / 9.0),
+        }
+    }
+}
+
+/// Active tool selected in the workstation canvas palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkstationTool {
+    #[default]
+    Pointer,
+    BrushMask,
+    EraserMask,
+    RectMarquee,
+    EllipseMarquee,
+    Lasso,
+    MagicWand,
+}
+
+impl WorkstationTool {
+    pub const ALL: [Self; 7] =
+        [Self::Pointer, Self::BrushMask, Self::EraserMask, Self::RectMarquee, Self::EllipseMarquee, Self::Lasso, Self::MagicWand];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Pointer => "↖ Pointer (V)",
+            Self::BrushMask => "🖌 Brush Mask (B)",
+            Self::EraserMask => "🧹 Eraser (E)",
+            Self::RectMarquee => "⬚ Rect Marquee (M)",
+            Self::EllipseMarquee => "⬭ Ellipse Marquee",
+            Self::Lasso => "➿ Lasso Marquee",
+            Self::MagicWand => "🪄 Magic Wand (W)",
         }
     }
 }
@@ -568,6 +600,22 @@ pub struct DitherCraftApp {
 
     // Phase 8.2: Draggable & Reorderable Downstream Effects Stack
     effect_stack: EffectStack,
+
+    // Phase 14-16: Tooling, Spatial Masking & Selection Marquees
+    active_tool: WorkstationTool,
+    brush_radius: f32,
+    brush_falloff: f32,
+    mask: Option<MaskBuffer>,
+    mask_blend_enabled: bool,
+    secondary_algo: String,
+    quick_mask_active: bool,
+    selection: Option<SelectionBuffer>,
+    selection_mode: SelectionMode,
+    wand_tolerance: f32,
+    lasso_points: Vec<(f32, f32)>,
+    drag_start_pixel: Option<(f32, f32)>,
+    drag_current_pixel: Option<(f32, f32)>,
+    marching_ants_phase: f32,
 }
 
 impl DitherCraftApp {
@@ -691,7 +739,7 @@ impl DitherCraftApp {
             audio_reactive_enabled: false,
 
             source_path: None,
-            recent_files: Vec::new(),
+            recent_files: Self::load_recent_files(),
 
             snapshots: [None, None, None, None],
             show_loupe: false,
@@ -745,6 +793,21 @@ impl DitherCraftApp {
             last_rendered_output: None,
 
             effect_stack: EffectStack::default_stack(),
+
+            active_tool: WorkstationTool::Pointer,
+            brush_radius: 24.0,
+            brush_falloff: 0.5,
+            mask: MaskBuffer::new(256, 256).ok(),
+            mask_blend_enabled: false,
+            secondary_algo: "Atkinson".into(),
+            quick_mask_active: false,
+            selection: SelectionBuffer::new(256, 256).ok(),
+            selection_mode: SelectionMode::New,
+            wand_tolerance: 0.12,
+            lasso_points: Vec::new(),
+            drag_start_pixel: None,
+            drag_current_pixel: None,
+            marching_ants_phase: 0.0,
         }
     }
 
@@ -755,11 +818,81 @@ impl DitherCraftApp {
         format!("{stem}_{algo}_{pal}.{ext}")
     }
 
+    fn recents_file_path() -> PathBuf {
+        PathBuf::from(".dithercraft_recents.json")
+    }
+
+    fn load_recent_files() -> Vec<PathBuf> {
+        let path = Self::recents_file_path();
+        if let Ok(data) = std::fs::read_to_string(&path)
+            && let Ok(paths) = serde_json::from_str::<Vec<PathBuf>>(&data)
+        {
+            paths.into_iter().filter(|p| p.exists()).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn save_recent_files(&self) {
+        let path = Self::recents_file_path();
+        if let Ok(json) = serde_json::to_string_pretty(&self.recent_files) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+
     fn add_recent_file(&mut self, path: PathBuf) {
         self.recent_files.retain(|p| p != &path);
         self.recent_files.insert(0, path);
         if self.recent_files.len() > 10 {
             self.recent_files.truncate(10);
+        }
+        self.save_recent_files();
+    }
+
+    pub fn ensure_buffers_dimension(&mut self, w: u32, h: u32) {
+        if self.mask.as_ref().map(|m| (m.width, m.height)) != Some((w, h)) {
+            self.mask = MaskBuffer::new(w, h).ok();
+        }
+        if self.selection.as_ref().map(|s| (s.width, s.height)) != Some((w, h)) {
+            self.selection = SelectionBuffer::new(w, h).ok();
+        }
+    }
+
+    pub fn select_all(&mut self) {
+        if let Some(ref img) = self.source_image {
+            self.ensure_buffers_dimension(img.width, img.height);
+            if let Some(sel) = self.selection.as_mut() {
+                sel.select_all();
+                self.status_text = "Selected entire canvas".into();
+            }
+        }
+    }
+
+    pub fn deselect(&mut self) {
+        if let Some(sel) = self.selection.as_mut() {
+            sel.clear();
+            self.status_text = "Cleared selection".into();
+        }
+    }
+
+    pub fn invert_selection(&mut self) {
+        if let Some(sel) = self.selection.as_mut() {
+            sel.invert();
+            self.status_text = "Inverted selection".into();
+        }
+    }
+
+    pub fn convert_selection_to_mask(&mut self) {
+        if let Some(sel) = self.selection.as_ref() {
+            self.mask = Some(sel.to_mask());
+            self.status_text = "Converted selection to mask".into();
+        }
+    }
+
+    pub fn convert_mask_to_selection(&mut self) {
+        if let Some(mask) = self.mask.as_ref() {
+            self.selection = Some(SelectionBuffer::from_mask(mask.clone()));
+            self.status_text = "Extracted selection from mask".into();
         }
     }
 
@@ -1004,7 +1137,12 @@ impl DitherCraftApp {
                 self.status_text = format!("Loaded animated GIF ({} frames)", self.source_frames.len());
                 self.trigger_render();
             }
+        } else if ext.eq_ignore_ascii_case("svg")
+            && let Ok(data) = std::fs::read_to_string(path)
+        {
+            self.status_text = format!("Loaded SVG vector file ({} bytes)", data.len());
         } else if let Ok(reader) = image::ImageReader::open(path)
+            && let Ok(reader) = reader.with_guessed_format()
             && let Ok(dyn_img) = reader.decode()
         {
             let rgb = dyn_img.to_rgb8();
@@ -1019,6 +1157,7 @@ impl DitherCraftApp {
                 self.canvas_pan = egui::Vec2::ZERO;
                 self.canvas_zoom = 1.0;
                 self.status_text = format!("Loaded static image ({w}x{h})");
+                self.ensure_buffers_dimension(w, h);
                 self.trigger_render();
             }
         }
@@ -1313,6 +1452,8 @@ impl DitherCraftApp {
         let flow_scale = self.flow_scale;
         let flow_swirl = self.flow_swirl;
 
+        let mask_blend_opt = if self.mask_blend_enabled { self.mask.clone().map(|m| (m, self.secondary_algo.clone())) } else { None };
+
         self.is_rendering = true;
         let gen_id = self.render_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cancel_token = self.render_generation.clone();
@@ -1354,7 +1495,19 @@ impl DitherCraftApp {
                 input_buf.adjust_levels(levels_black, levels_white, levels_gamma);
             }
 
-            let mut out = algo.apply(&input_buf, &palette).unwrap_or_else(|_| input_buf.clone());
+            let sec_algo: Option<Box<dyn DitherAlgorithm>> = if let Some((_, ref sec_name)) = mask_blend_opt {
+                create_algorithm(sec_name).or_else(|| Some(Box::new(Atkinson::default())))
+            } else {
+                None
+            };
+
+            let mut out = if let (Some((mask, _)), Some(sec_inst)) = (&mask_blend_opt, &sec_algo) {
+                let out_a = algo.apply(&input_buf, &palette).unwrap_or_else(|_| input_buf.clone());
+                let out_b = sec_inst.apply(&input_buf, &palette).unwrap_or_else(|_| input_buf.clone());
+                mask.blend_images(&out_a, &out_b).unwrap_or(out_a)
+            } else {
+                algo.apply(&input_buf, &palette).unwrap_or_else(|_| input_buf.clone())
+            };
             let dither_ms = t_dither.elapsed().as_secs_f64() * 1000.0;
 
             if cancel_token.load(Ordering::Relaxed) != gen_id {
@@ -1475,6 +1628,22 @@ impl DitherCraftApp {
                 }
             }
 
+            if self.quick_mask_active
+                && let Some(ref mask) = self.mask
+                && mask.width as usize == width
+                && mask.height as usize == height
+            {
+                for (pixel_rgba, &m_val) in color_data.chunks_exact_mut(4).zip(&mask.data) {
+                    if m_val > 0 {
+                        let alpha = (m_val as f32 / 255.0) * 0.45;
+                        let inv = 1.0 - alpha;
+                        pixel_rgba[0] = ((pixel_rgba[0] as f32 * inv) + (255.0 * alpha)).round() as u8;
+                        pixel_rgba[1] = ((pixel_rgba[1] as f32 * inv) + (30.0 * alpha)).round() as u8;
+                        pixel_rgba[2] = ((pixel_rgba[2] as f32 * inv) + (60.0 * alpha)).round() as u8;
+                    }
+                }
+            }
+
             let color_image = ColorImage::from_rgba_unmultiplied([width, height], &color_data);
             if let Some(tex) = self.texture.as_mut() {
                 tex.set(color_image, TextureOptions::NEAREST);
@@ -1556,6 +1725,41 @@ impl eframe::App for DitherCraftApp {
             self.show_loupe = !self.show_loupe;
         }
 
+        // Tools & Masking Shortcuts
+        if !ctx.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt) {
+            if ctx.input(|i| i.key_pressed(egui::Key::V)) {
+                self.active_tool = WorkstationTool::Pointer;
+                self.status_text = "Tool: Pointer (V)".into();
+            } else if ctx.input(|i| i.key_pressed(egui::Key::B)) {
+                self.active_tool = WorkstationTool::BrushMask;
+                self.status_text = "Tool: Brush Mask (B)".into();
+            } else if ctx.input(|i| i.key_pressed(egui::Key::E)) {
+                self.active_tool = WorkstationTool::EraserMask;
+                self.status_text = "Tool: Eraser Mask (E)".into();
+            } else if ctx.input(|i| i.key_pressed(egui::Key::M)) {
+                self.active_tool = WorkstationTool::RectMarquee;
+                self.status_text = "Tool: Rect Marquee (M)".into();
+            } else if ctx.input(|i| i.key_pressed(egui::Key::W)) {
+                self.active_tool = WorkstationTool::MagicWand;
+                self.status_text = "Tool: Magic Wand (W)".into();
+            } else if ctx.input(|i| i.key_pressed(egui::Key::Q)) {
+                self.quick_mask_active = !self.quick_mask_active;
+                self.status_text = format!("Quick Mask: {}", if self.quick_mask_active { "ON" } else { "OFF" });
+                self.update_texture(ctx);
+            }
+        }
+
+        // Selection Shortcuts (Ctrl+A, Ctrl+D, Ctrl+Shift+I)
+        if ctx.input(|i| i.modifiers.command || i.modifiers.ctrl) {
+            if ctx.input(|i| i.key_pressed(egui::Key::A)) {
+                self.select_all();
+            } else if ctx.input(|i| i.key_pressed(egui::Key::D)) {
+                self.deselect();
+            } else if ctx.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::I)) {
+                self.invert_selection();
+            }
+        }
+
         // Toggle Keyboard Shortcuts Cheatsheet (F1 or ?)
         if ctx.input(|i| i.key_pressed(egui::Key::F1) || (i.modifiers.shift && i.key_pressed(egui::Key::Slash))) {
             self.show_shortcuts_dialog = !self.show_shortcuts_dialog;
@@ -1578,7 +1782,13 @@ impl eframe::App for DitherCraftApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open Image, GIF, or Video...").clicked() {
                         let path = rfd::FileDialog::new()
-                            .add_filter("Media Files", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "m4v", "webm", "mkv"])
+                            .add_filter(
+                                "Media Files",
+                                &[
+                                    "png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "m4v", "webm", "mkv", "tiff", "tif", "tga", "ico", "qoi",
+                                    "hdr", "svg",
+                                ],
+                            )
                             .pick_file();
                         if let Some(path) = path {
                             self.load_media_file(&path);
@@ -2437,6 +2647,42 @@ impl eframe::App for DitherCraftApp {
                     ui.label("Toggle Shortcuts Cheatsheet");
                     ui.monospace("F1 / ?");
                     ui.end_row();
+
+                    ui.label("Workstation Pointer Tool");
+                    ui.monospace("V");
+                    ui.end_row();
+
+                    ui.label("Brush Mask Tool");
+                    ui.monospace("B");
+                    ui.end_row();
+
+                    ui.label("Eraser Mask Tool");
+                    ui.monospace("E");
+                    ui.end_row();
+
+                    ui.label("Rect Marquee Selection");
+                    ui.monospace("M");
+                    ui.end_row();
+
+                    ui.label("Magic Wand Selection");
+                    ui.monospace("W");
+                    ui.end_row();
+
+                    ui.label("Toggle Quick Mask Overlay");
+                    ui.monospace("Q");
+                    ui.end_row();
+
+                    ui.label("Select All Canvas");
+                    ui.monospace("Ctrl+A");
+                    ui.end_row();
+
+                    ui.label("Deselect Selection");
+                    ui.monospace("Ctrl+D");
+                    ui.end_row();
+
+                    ui.label("Invert Selection");
+                    ui.monospace("Ctrl+Shift+I");
+                    ui.end_row();
                 });
                 ui.add_space(8.0);
                 if ui.button("Close").clicked() {
@@ -2849,6 +3095,151 @@ impl eframe::App for DitherCraftApp {
                     &mut changed,
                     &mut preview_changed,
                 );
+            });
+
+            // Workstation Tools, Masking & Selection
+            ui.group(|ui| {
+                ui.label("Workstation Tools & Masking:");
+                ui.horizontal_wrapped(|ui| {
+                    for tool in WorkstationTool::ALL {
+                        if ui.selectable_label(self.active_tool == tool, tool.label()).clicked() {
+                            self.active_tool = tool;
+                        }
+                    }
+                });
+
+                match self.active_tool {
+                    WorkstationTool::BrushMask | WorkstationTool::EraserMask => {
+                        ui.horizontal(|ui| {
+                            ui.label("Radius:");
+                            ui.add(egui::Slider::new(&mut self.brush_radius, 1.0..=128.0).text("px"));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Falloff:");
+                            ui.add(egui::Slider::new(&mut self.brush_falloff, 0.0..=1.0).text("Hardness"));
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Linear Grad").on_hover_text("Apply procedural linear gradient to mask").clicked()
+                                && let Some(ref mut m) = self.mask
+                            {
+                                m.apply_linear_gradient(0.0, 0.0, m.width as f32, 0.0);
+                                if self.mask_blend_enabled {
+                                    changed = true;
+                                } else {
+                                    self.update_texture(ctx);
+                                }
+                            }
+                            if ui.button("Radial Grad").on_hover_text("Apply procedural radial gradient to mask").clicked()
+                                && let Some(ref mut m) = self.mask
+                            {
+                                let cx = m.width as f32 * 0.5;
+                                let cy = m.height as f32 * 0.5;
+                                m.apply_radial_gradient(cx, cy, 0.0, cx.min(cy));
+                                if self.mask_blend_enabled {
+                                    changed = true;
+                                } else {
+                                    self.update_texture(ctx);
+                                }
+                            }
+                            if ui.button("Invert").on_hover_text("Invert alpha mask").clicked()
+                                && let Some(ref mut m) = self.mask
+                            {
+                                m.invert();
+                                if self.mask_blend_enabled {
+                                    changed = true;
+                                } else {
+                                    self.update_texture(ctx);
+                                }
+                            }
+                            if ui.button("Clear").on_hover_text("Clear mask to 0").clicked()
+                                && let Some(ref mut m) = self.mask
+                            {
+                                m.clear();
+                                if self.mask_blend_enabled {
+                                    changed = true;
+                                } else {
+                                    self.update_texture(ctx);
+                                }
+                            }
+                        });
+                        if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
+                            self.update_texture(ctx);
+                        }
+                    }
+                    WorkstationTool::RectMarquee | WorkstationTool::EllipseMarquee | WorkstationTool::Lasso | WorkstationTool::MagicWand => {
+                        ui.horizontal(|ui| {
+                            ui.label("Mode:");
+                            egui::ComboBox::from_id_salt("selection_mode_combo")
+                                .selected_text(match self.selection_mode {
+                                    SelectionMode::New => "New",
+                                    SelectionMode::Add => "Add (+)",
+                                    SelectionMode::Subtract => "Subtract (-)",
+                                    SelectionMode::Intersect => "Intersect (∩)",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::New, "New");
+                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Add, "Add (+)");
+                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Subtract, "Subtract (-)");
+                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Intersect, "Intersect (∩)");
+                                });
+                        });
+                        if self.active_tool == WorkstationTool::MagicWand {
+                            ui.horizontal(|ui| {
+                                ui.label("Wand Tolerance:");
+                                ui.add(egui::Slider::new(&mut self.wand_tolerance, 0.01..=0.50).text("OKLab ΔE"));
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("Select All").clicked() {
+                                self.select_all();
+                            }
+                            if ui.button("Deselect").clicked() {
+                                self.deselect();
+                            }
+                            if ui.button("Invert").clicked() {
+                                self.invert_selection();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Selection ➔ Mask").on_hover_text("Bake active marquee selection into mask").clicked() {
+                                self.convert_selection_to_mask();
+                                if self.mask_blend_enabled {
+                                    changed = true;
+                                } else {
+                                    self.update_texture(ctx);
+                                }
+                            }
+                            if ui.button("Mask ➔ Selection").on_hover_text("Extract marquee selection from mask threshold").clicked() {
+                                self.convert_mask_to_selection();
+                            }
+                        });
+                    }
+                    WorkstationTool::Pointer => {
+                        ui.label("Drag canvas to pan, scroll to zoom.");
+                        if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
+                            self.update_texture(ctx);
+                        }
+                    }
+                }
+
+                // Dual-Algorithm Spatial Blending
+                ui.separator();
+                if ui.checkbox(&mut self.mask_blend_enabled, "Dual-Algorithm Mask Blending").changed() {
+                    changed = true;
+                }
+                if self.mask_blend_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("Secondary:");
+                        egui::ComboBox::from_id_salt("secondary_algo_picker").width(180.0).selected_text(&self.secondary_algo).show_ui(ui, |ui| {
+                            for info in dither_core::algorithms::ALL_ALGORITHMS.iter() {
+                                if ui.selectable_value(&mut self.secondary_algo, info.name.to_string(), info.name).clicked() {
+                                    changed = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.label(egui::RichText::new("Primary algo applies to Mask > 0; Secondary applies to Mask = 0.").italics().size(10.5));
+                }
             });
 
             // Algorithm Search & Picker
@@ -3479,13 +3870,122 @@ impl eframe::App for DitherCraftApp {
             let (response, painter) = ui.allocate_painter(available_rect.size(), egui::Sense::click_and_drag());
 
             // Pan interaction:
-            // Middle-click drag, Right-click drag, or Space/Alt + Left-click drag
+            // Middle-click drag, Right-click drag, or Space/Alt + Left-click drag, or Pointer tool
             let is_panning = response.dragged_by(egui::PointerButton::Middle)
                 || response.dragged_by(egui::PointerButton::Secondary)
-                || (response.dragged_by(egui::PointerButton::Primary) && ui.input(|i| i.modifiers.alt || i.key_down(egui::Key::Space)));
+                || (response.dragged_by(egui::PointerButton::Primary)
+                    && (ui.input(|i| i.modifiers.alt || i.key_down(egui::Key::Space)) || self.active_tool == WorkstationTool::Pointer));
 
             if is_panning {
                 self.canvas_pan += response.drag_delta();
+            }
+
+            // Interactive Tool Handling on Canvas
+            if !is_panning
+                && self.active_tool != WorkstationTool::Pointer
+                && let Some(tex) = &self.texture
+            {
+                let (tex_w, tex_h) = (tex.size()[0] as f32, tex.size()[1] as f32);
+                let img_size = egui::vec2(tex_w * self.canvas_zoom, tex_h * self.canvas_zoom);
+                let img_center = available_rect.center() + self.canvas_pan;
+                let img_rect = egui::Rect::from_center_size(img_center, img_size);
+
+                if let Some(pointer_pos) = response.interact_pointer_pos().or_else(|| response.hover_pos()) {
+                    let rel_x = (pointer_pos.x - img_rect.min.x) / self.canvas_zoom;
+                    let rel_y = (pointer_pos.y - img_rect.min.y) / self.canvas_zoom;
+
+                    self.ensure_buffers_dimension(tex_w as u32, tex_h as u32);
+
+                    match self.active_tool {
+                        WorkstationTool::BrushMask => {
+                            if (response.dragged_by(egui::PointerButton::Primary) || response.clicked_by(egui::PointerButton::Primary))
+                                && let Some(mask) = self.mask.as_mut()
+                            {
+                                mask.paint_brush(rel_x.round() as i32, rel_y.round() as i32, self.brush_radius, self.brush_falloff, 1.0, false);
+                                if self.mask_blend_enabled {
+                                    self.trigger_render_preview();
+                                } else {
+                                    self.update_texture(ctx);
+                                }
+                            }
+                        }
+                        WorkstationTool::EraserMask => {
+                            if (response.dragged_by(egui::PointerButton::Primary) || response.clicked_by(egui::PointerButton::Primary))
+                                && let Some(mask) = self.mask.as_mut()
+                            {
+                                mask.paint_brush(rel_x.round() as i32, rel_y.round() as i32, self.brush_radius, self.brush_falloff, 1.0, true);
+                                if self.mask_blend_enabled {
+                                    self.trigger_render_preview();
+                                } else {
+                                    self.update_texture(ctx);
+                                }
+                            }
+                        }
+                        WorkstationTool::RectMarquee | WorkstationTool::EllipseMarquee => {
+                            if response.drag_started_by(egui::PointerButton::Primary) {
+                                self.drag_start_pixel = Some((rel_x.clamp(0.0, tex_w), rel_y.clamp(0.0, tex_h)));
+                                self.drag_current_pixel = self.drag_start_pixel;
+                            } else if response.dragged_by(egui::PointerButton::Primary) {
+                                self.drag_current_pixel = Some((rel_x.clamp(0.0, tex_w), rel_y.clamp(0.0, tex_h)));
+                            } else if response.drag_stopped_by(egui::PointerButton::Primary)
+                                && let (Some((x0, y0)), Some((x1, y1))) = (self.drag_start_pixel.take(), self.drag_current_pixel.take())
+                                && let Some(sel) = self.selection.as_mut()
+                            {
+                                if self.active_tool == WorkstationTool::RectMarquee {
+                                    let min_x = x0.min(x1).round() as u32;
+                                    let min_y = y0.min(y1).round() as u32;
+                                    let w = (x1 - x0).abs().round().max(1.0) as u32;
+                                    let h = (y1 - y0).abs().round().max(1.0) as u32;
+                                    sel.select_rect(min_x, min_y, w, h, self.selection_mode);
+                                } else {
+                                    let cx = (x0 + x1) * 0.5;
+                                    let cy = (y0 + y1) * 0.5;
+                                    let rx = ((x1 - x0).abs() * 0.5).max(1.0);
+                                    let ry = ((y1 - y0).abs() * 0.5).max(1.0);
+                                    sel.select_ellipse(cx, cy, rx, ry, self.selection_mode);
+                                }
+                            }
+                        }
+                        WorkstationTool::Lasso => {
+                            if response.drag_started_by(egui::PointerButton::Primary) {
+                                self.lasso_points.clear();
+                                if rel_x >= 0.0 && rel_x < tex_w && rel_y >= 0.0 && rel_y < tex_h {
+                                    self.lasso_points.push((rel_x, rel_y));
+                                }
+                            } else if response.dragged_by(egui::PointerButton::Primary) {
+                                if rel_x >= 0.0 && rel_x < tex_w && rel_y >= 0.0 && rel_y < tex_h {
+                                    let pt = (rel_x, rel_y);
+                                    let should_push = match self.lasso_points.last() {
+                                        Some(&(lx, ly)) => (lx - rel_x).hypot(ly - rel_y) > 1.0,
+                                        None => true,
+                                    };
+                                    if should_push {
+                                        self.lasso_points.push(pt);
+                                    }
+                                }
+                            } else if response.drag_stopped_by(egui::PointerButton::Primary) {
+                                if self.lasso_points.len() >= 3
+                                    && let Some(sel) = self.selection.as_mut()
+                                {
+                                    sel.select_polygon(&self.lasso_points, self.selection_mode);
+                                }
+                                self.lasso_points.clear();
+                            }
+                        }
+                        WorkstationTool::MagicWand => {
+                            if response.clicked_by(egui::PointerButton::Primary)
+                                && rel_x >= 0.0
+                                && rel_x < tex_w
+                                && rel_y >= 0.0
+                                && rel_y < tex_h
+                                && let (Some(sel), Some(src)) = (self.selection.as_mut(), self.source_image.as_ref())
+                            {
+                                sel.magic_wand(src, rel_x as u32, rel_y as u32, self.wand_tolerance, self.selection_mode);
+                            }
+                        }
+                        WorkstationTool::Pointer => {}
+                    }
+                }
             }
 
             // Smooth Zoom interaction centered on mouse cursor
@@ -3522,6 +4022,57 @@ impl eframe::App for DitherCraftApp {
 
                 // Draw image
                 clipped_painter.image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+
+                // Draw active selection marching ants
+                self.marching_ants_phase = (self.marching_ants_phase + 0.4) % 8.0;
+                if let Some(ref sel) = self.selection {
+                    let segments = sel.extract_marching_ants_segments();
+                    if !segments.is_empty() {
+                        ctx.request_repaint();
+                        let phase = self.marching_ants_phase;
+                        for (idx, (p1, p2)) in segments.iter().enumerate() {
+                            let start = img_rect.min + egui::vec2(p1.0 * self.canvas_zoom, p1.1 * self.canvas_zoom);
+                            let end = img_rect.min + egui::vec2(p2.0 * self.canvas_zoom, p2.1 * self.canvas_zoom);
+                            let is_white = (((idx as f32 + phase) as usize) / 4).is_multiple_of(2);
+                            let stroke_color = if is_white { Color32::WHITE } else { Color32::BLACK };
+                            clipped_painter.line_segment([start, end], egui::Stroke::new(1.5_f32, stroke_color));
+                        }
+                    }
+                }
+
+                // Draw drag marquee preview
+                if let (Some((x0, y0)), Some((x1, y1))) = (self.drag_start_pixel, self.drag_current_pixel) {
+                    let p0 = img_rect.min + egui::vec2(x0.min(x1) * self.canvas_zoom, y0.min(y1) * self.canvas_zoom);
+                    let p1 = img_rect.min + egui::vec2(x0.max(x1) * self.canvas_zoom, y0.max(y1) * self.canvas_zoom);
+                    let drag_rect = egui::Rect::from_min_max(p0, p1);
+                    let stroke = egui::Stroke::new(1.2_f32, Color32::from_rgb(100, 200, 255));
+                    if self.active_tool == WorkstationTool::RectMarquee {
+                        clipped_painter.rect_stroke(drag_rect, 0.0, stroke);
+                    } else if self.active_tool == WorkstationTool::EllipseMarquee {
+                        clipped_painter.circle_stroke(drag_rect.center(), (drag_rect.width() * 0.5).min(drag_rect.height() * 0.5), stroke);
+                    }
+                }
+                if !self.lasso_points.is_empty() {
+                    for pair in self.lasso_points.windows(2) {
+                        let a = img_rect.min + egui::vec2(pair[0].0 * self.canvas_zoom, pair[0].1 * self.canvas_zoom);
+                        let b = img_rect.min + egui::vec2(pair[1].0 * self.canvas_zoom, pair[1].1 * self.canvas_zoom);
+                        clipped_painter.line_segment([a, b], egui::Stroke::new(1.2_f32, Color32::from_rgb(100, 200, 255)));
+                    }
+                }
+
+                // Draw interactive brush cursor outline on hover
+                if (self.active_tool == WorkstationTool::BrushMask || self.active_tool == WorkstationTool::EraserMask)
+                    && let Some(ptr) = response.hover_pos()
+                    && available_rect.contains(ptr)
+                {
+                    let radius = self.brush_radius * self.canvas_zoom;
+                    let brush_color = if self.active_tool == WorkstationTool::BrushMask {
+                        Color32::from_rgba_unmultiplied(255, 80, 80, 200)
+                    } else {
+                        Color32::from_rgba_unmultiplied(100, 180, 255, 200)
+                    };
+                    clipped_painter.circle_stroke(ptr, radius, egui::Stroke::new(1.2_f32, brush_color));
+                }
 
                 // Pixel Grid Overlay (at >= 800% zoom)
                 if self.show_pixel_grid && self.canvas_zoom >= 8.0 {
@@ -4009,5 +4560,27 @@ mod tests {
         assert_eq!(default_levels_black(), 0);
         assert_eq!(default_levels_white(), 255);
         assert!((default_levels_gamma() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_workstation_tool_labels_and_defaults() {
+        assert_eq!(WorkstationTool::default(), WorkstationTool::Pointer);
+        for tool in WorkstationTool::ALL {
+            assert!(!tool.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_mask_and_selection_integration() {
+        let mut mask = MaskBuffer::new(64, 64).expect("create mask");
+        assert!(mask.is_empty());
+        mask.paint_brush(32, 32, 10.0, 0.5, 1.0, false);
+        assert!(!mask.is_empty());
+
+        let sel = SelectionBuffer::from_mask(mask.clone());
+        assert!(!sel.is_empty());
+        let roundtrip_mask = sel.to_mask();
+        assert_eq!(roundtrip_mask.width, 64);
+        assert_eq!(roundtrip_mask.height, 64);
     }
 }
