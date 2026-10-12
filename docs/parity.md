@@ -169,12 +169,12 @@ DitherCraft achieves complete parity across **6 mathematical categories**:
 | **Canvas Rulers & Aspect Ratio Guides** | Phase 8 | Pixel alignment & retro display framing | Perfect retro composition (Game Boy, NES, CGA, CRT) | **DELIVERED (`v0.9.6`)** |
 | **CVD Color Blindness Simulation** | Phase 8 | Machado (2009) & Brettel (1997) models | Accessibility & high-contrast print legibility auditing | **DELIVERED (`v0.9.6`)** |
 | **Selective Alpha Masks & Tonal Bands** | Phase 9 | Alpha compositing & luminance bands | Non-destructive region-selective dither application | **DELIVERED (`v0.9.8`)** |
-| **Custom Threshold Matrix Designer** | Phase 9 | Dynamic $N \times N$ matrix compiler | In-app creation of custom ordered halftones and stamps | Planned (`v1.1.0`) |
+| **Custom Threshold Matrix Designer** | Phase 9 | Dynamic $N \times N$ matrix compiler | In-app creation of custom ordered halftones and stamps | **DELIVERED (`v0.9.8`)** |
 | **Pure-Rust 3D LUT Engine** | Phase 9 | Trilinear `.cube` interpolation | Authentic 1970s film and vintage CRT phosphor emulation | **DELIVERED (`v0.9.7`)** |
 | **CMYK Rosette Halftone Angle Screens** | Phase 10 | Traditional offset rosette screening | Moiré-free offset print separations with dot gain | **DELIVERED (`v0.9.8`)** |
 | **Spot Color Plates & Registration Targets**| Phase 10 | Screen printing positive plate export | Separation films with corner bullseyes and wedges | **DELIVERED (`v0.9.7`)** |
-| **Plotter Arc Fitting (G02/G03) & Nib Offset**| Phase 10 | Circular curve fitting & stroke offsetting | 70% G-code reduction and ink bleed prevention | Planned (`v1.1.0`) |
-| **Geometric & Stippled Hatch Infill** | Phase 10 | Continuous vector boundary infills | Pen plotter shading and laser hatch toolpaths | Planned (`v1.1.0`) |
+| **Plotter Arc Fitting (G02/G03) & Nib Offset**| Phase 10 | Circular curve fitting & stroke offsetting | 70% G-code reduction and ink bleed prevention | **DELIVERED (`v0.9.8`)** |
+| **Geometric & Stippled Hatch Infill** | Phase 10 | Continuous vector boundary infills | Pen plotter shading and laser hatch toolpaths | **DELIVERED (`v0.9.8`)** |
 | **Multi-Track Automation Timeline** | Phase 11 | Cubic Bézier parameter keyframing | Dynamic parameter animation for music videos | Planned (`v1.2.0`) |
 | **Temporal Coherence & Flicker Suppression**| Phase 11 | Motion-compensated inter-frame error | Smooth video sequences with zero noise swim | Planned (`v1.2.0`) |
 | **Animation Lightbox & Onion Skinning** | Phase 11 | Multi-frame rotoscope ghosting | Frame-by-frame pixel sprite refinement | Planned (`v1.2.0`) |

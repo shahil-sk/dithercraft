@@ -36,7 +36,7 @@ pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykChannel, CmykHalftone, CmykSeparationPlates, HalftoneDotShape, PopTone};
 pub use temporal::{AnimatedFrame, AnimationSequence, Interpolation, Keyframe, LfoModulator, LfoWaveform, TemporalNoisePattern, TimelineTrack};
 pub use vector::{
-    BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, SpotColorPlateSeparation, ToolpathStroke,
-    export_smooth_bezier_svg, fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
+    BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, HatchStyle, MultiColorSvgSeparation, Point2D, SpotColorPlateSeparation,
+    ToolpathStroke, export_smooth_bezier_svg, fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
 };
 pub use video::{Mp4Demuxer, Mp4Sample, Mp4Track, VideoCodec, WebmDemuxer, WebmSample, WebmTrack, WebpAnimFrame, WebpAnimationMuxer};

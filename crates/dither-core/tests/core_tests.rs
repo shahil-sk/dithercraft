@@ -652,3 +652,62 @@ fn test_spatial_tonal_band_dithering() {
     assert_eq!(alpha_out.width, 32);
     assert_eq!(alpha_out.height, 32);
 }
+
+#[test]
+fn test_gcode_arc_fitting_and_hatch_styles() {
+    use dither_core::vector::{GCodeConfig, GCodeExporter, HatchStyle};
+
+    let mut buf = ImageBuffer::new(16, 16).expect("buf");
+    for y in 2..14 {
+        for x in 2..14 {
+            buf.set_pixel(x, y, RgbColor::new(0, 0, 0));
+        }
+    }
+
+    // 1. Vertical hatch style
+    let config_vert = GCodeConfig { hatch_style: HatchStyle::Vertical, ..Default::default() };
+    let gcode_vert = GCodeExporter::generate_gcode(&buf, &config_vert).expect("vert gcode");
+    assert!(gcode_vert.contains("Hatch style: Vertical"));
+
+    // 2. 45-degree crosshatch style
+    let config_diag = GCodeConfig { hatch_style: HatchStyle::CrossHatch45, hatch_spacing_mm: 1.0, ..Default::default() };
+    let gcode_diag = GCodeExporter::generate_gcode(&buf, &config_diag).expect("diag gcode");
+    assert!(gcode_diag.contains("Hatch style: CrossHatch45"));
+
+    // 3. Stipple Poisson style
+    let config_stipple = GCodeConfig { hatch_style: HatchStyle::StipplePoisson, hatch_spacing_mm: 1.5, ..Default::default() };
+    let gcode_stipple = GCodeExporter::generate_gcode(&buf, &config_stipple).expect("stipple gcode");
+    assert!(gcode_stipple.contains("Hatch style: StipplePoisson"));
+
+    // 4. Arc fitting on circle points
+    let arc_config = GCodeConfig { arc_fitting: true, arc_tolerance: 0.5, tool_change_pause: true, tool_number: Some(1), ..Default::default() };
+
+    let gcode_arc = GCodeExporter::generate_gcode(&buf, &arc_config).expect("arc gcode");
+    assert!(gcode_arc.contains("T01 M06 ; Tool change"));
+    assert!(gcode_arc.contains("M00 ; Pause for pen inspection"));
+    assert!(gcode_arc.contains("Arc fitting: true"));
+}
+
+#[test]
+fn test_custom_matrix_workshop() {
+    use dither_core::algorithms::CustomMatrixDither;
+
+    let matrix = CustomMatrixDither::new("Checker 2x2", 2, 2, vec![64, 192, 192, 64]).expect("custom matrix");
+
+    let mut buf = ImageBuffer::new(4, 4).expect("buf");
+    for y in 0..4 {
+        for x in 0..4 {
+            buf.set_pixel(x, y, RgbColor::new(128, 128, 128));
+        }
+    }
+    let pal = Palette::monochrome();
+    let out = matrix.apply(&buf, &pal).expect("custom matrix apply");
+    assert_eq!(out.width, 4);
+    assert_eq!(out.height, 4);
+
+    let json = matrix.to_json().expect("matrix json");
+    let loaded = CustomMatrixDither::from_json(&json).expect("from json");
+    assert_eq!(loaded.name, "Checker 2x2");
+    assert_eq!(loaded.width, 2);
+    assert_eq!(loaded.height, 2);
+}

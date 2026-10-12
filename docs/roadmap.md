@@ -275,9 +275,11 @@ Focus: Expand creative versatility for artists, printmakers, and multimedia desi
   - Zero heap allocation in hot loop blending.
 
 ### 9.2 Custom Threshold Matrix Designer
-- [ ] **Interactive Matrix Workshop**:
-  - In-app $N \times N$ matrix editor ($2\times 2$ up to $16\times 16$) enabling artists to paint, import, and test custom ordered dithering patterns.
-  - Export and import custom matrices as JSON or PNG bitmap patterns (e.g., custom typography stamps, logos, geometric crosshatching).
+- [x] **Interactive Matrix Workshop**:
+  - `CustomMatrixDither` engine supporting dynamic $N \times M$ matrix thresholds ($2\times 2$ up to $16\times 16$).
+  - Full JSON import and export for sharing custom ordered dithering patterns, stamps, and crosshatching matrices.
+  - Interactive GUI panel with preset buttons (Spiral 4x4, Checker 2x2, Bayer 4x4 Variant) and dynamic file picker integration.
+  - Direct factory instantiation via `create_algorithm("custom")`.
 
 ### 9.3 3D LUT (Look-Up Table) Vintage Film Emulation
 - [x] **Pure-Rust 3D LUT Engine**:
@@ -315,17 +317,19 @@ Focus: Expand DitherCraft into the industry-standard vector and separation engin
   - GUI File menu integration: "Export Silkscreen Print Plates (.svg)..." and CLI subcommand `export-plates`.
 
 ### 10.3 Pen Plotter Arc Fitting (G02/G03) & Bi-Directional Nib Width Offsetting
-- [ ] **Physical Plotter Toolpath Refinement**:
+- [x] **Physical Plotter Toolpath Refinement**:
   - Bi-directional stroke offsetting simulating actual pen nib widths ($0.1\text{mm}$ to $1.2\text{mm}$), preventing ink bleeding and paper tearing during dense stippling.
-  - Circular arc fitting converting dense polyline segments into native circular interpolation commands (`G02` clockwise / `G03` counter-clockwise), reducing G-code file sizes by up to $70\%$ and eliminating plotter mechanical vibration.
-  - Pen change pause commands (`M00` / `M06`) with user prompts for multi-color pen sequencing.
+  - Circular arc fitting converting qualifying polyline segments into native circular interpolation commands (`G02` clockwise / `G03` counter-clockwise) with relative `I` and `J` center offsets, dramatically shrinking file sizes and reducing plotter mechanical vibration.
+  - Pen change pause commands (`T01 M06` and `M00`) for multi-color pen sequencing and calibration inspection.
 
 ### 10.4 Geometric & Stippled Hatch Infill Patterns
-- [ ] **Vector Infill Engine**:
-  - Interior contour infill generation for closed vector outlines:
-    - Parallel line hatching with user-defined angles and spacing ($0.2\text{mm}\text{--}5.0\text{mm}$).
-    - Cross-hatching with dual angular sweeps.
-    - Concentric offset spiral infills and stochastic Poisson-disk stippling for pen plotter shading.
+- [x] **Vector Infill Engine**:
+  - `HatchStyle` infill generation across dark regions for pen plotter and laser fabrication:
+    - Horizontal scanline raster strokes.
+    - Vertical column strokes.
+    - Dual 45-degree diagonal cross-hatching with configurable line spacing.
+    - Stippled Poisson dot peck-drilling / pen taps.
+  - CLI subcommand `gcode` with full hatch, arc fitting, and nib offset options.
 
 ---
 

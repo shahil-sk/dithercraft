@@ -1,5 +1,6 @@
 pub mod artistic;
 pub mod bitmap;
+pub mod custom_matrix;
 pub mod error_diffusion;
 pub mod halftone;
 pub mod modulation;
@@ -9,6 +10,7 @@ pub mod traits;
 
 pub use artistic::{EtchingCrosshatch, MatrixGlitchDispersion, Mezzotint, NewsprintGrain, Stippling, WoodcutSimulation};
 pub use bitmap::{FixedThreshold, GaussianLocalThreshold, MeanThreshold, MultiLevelStep, NiblackBinarization, OtsuThreshold, SauvolaBinarization};
+pub use custom_matrix::CustomMatrixDither;
 pub use error_diffusion::{
     Atkinson, Burkes, DotDiffusion, Fan, FloydSteinberg, JarvisJudiceNinke, MinimizedAverageError, Ostromoukhov, Riemersma, ShiauFan1, ShiauFan2,
     Sierra2, Sierra3, SierraLite, StevensonArce, Stucki, VariableError,
@@ -217,6 +219,7 @@ pub fn create_algorithm(name: &str) -> Option<Box<dyn DitherAlgorithm>> {
         "tonalbandmultidither" | "tonalband" => {
             Some(Box::new(TonalBandDither::new(85, 170, 16, Box::new(Bayer8x8), Box::new(FloydSteinberg::default()), Box::new(Atkinson::default()))))
         }
+        "custommatrix" | "custom" => Some(Box::new(CustomMatrixDither::default())),
 
         _ => None,
     }

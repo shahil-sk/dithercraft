@@ -4,8 +4,8 @@ mod mcp;
 
 use clap::{Parser, Subcommand};
 use dither_core::{
-    AudioTrack, ColorHarmony, Cube3dLut, ImageBuffer, Mp4Demuxer, SpotColorPlateSeparation, WebmDemuxer, algorithms::*, color::RgbColor,
-    palette::Palette, renderers::*, temporal::TemporalNoisePattern, vector::BlackVectorIsolation,
+    AudioTrack, ColorHarmony, Cube3dLut, GCodeConfig, GCodeExporter, HatchStyle, ImageBuffer, Mp4Demuxer, SpotColorPlateSeparation, WebmDemuxer,
+    algorithms::*, color::RgbColor, palette::Palette, renderers::*, temporal::TemporalNoisePattern, vector::BlackVectorIsolation,
 };
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::{AnimationDecoder, Frame, ImageReader, RgbaImage};
@@ -190,6 +190,29 @@ enum Commands {
         highlight_threshold: u8,
         #[arg(long, default_value_t = 16)]
         feather: u8,
+    },
+    /// Export CNC / pen plotter toolpath program (.gcode / .nc) with arc fitting and hatch infills
+    Gcode {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 0.5)]
+        scale: f32,
+        #[arg(long, default_value_t = 128)]
+        threshold: u8,
+        #[arg(long, default_value = "horizontal")]
+        hatch: String,
+        #[arg(long, default_value_t = 0.5)]
+        spacing: f32,
+        #[arg(long, default_value_t = false)]
+        arc_fitting: bool,
+        #[arg(long, default_value_t = 0.1)]
+        arc_tolerance: f32,
+        #[arg(long, default_value_t = 0.5)]
+        nib_width: f32,
+        #[arg(long, default_value_t = false)]
+        bi_directional: bool,
     },
     /// Run Model Context Protocol (MCP) JSON-RPC server over stdio
     Mcp,
@@ -695,6 +718,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 shadow_algo,
                 mid_algo,
                 hi_algo,
+                input.display(),
+                output.display(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+
+        Commands::Gcode { input, output, scale, threshold, hatch, spacing, arc_fitting, arc_tolerance, nib_width, bi_directional } => {
+            let start = Instant::now();
+            let img = load_image(&input)?;
+            let hatch_style = match hatch.to_lowercase().as_str() {
+                "vertical" | "vert" => HatchStyle::Vertical,
+                "cross" | "crosshatch" | "crosshatch45" => HatchStyle::CrossHatch45,
+                "stipple" | "poisson" => HatchStyle::StipplePoisson,
+                _ => HatchStyle::Horizontal,
+            };
+
+            let config = GCodeConfig {
+                scale_mm_per_pixel: scale,
+                threshold,
+                hatch_style,
+                hatch_spacing_mm: spacing,
+                arc_fitting,
+                arc_tolerance,
+                nib_width_mm: nib_width,
+                bi_directional_offset: bi_directional,
+                ..Default::default()
+            };
+
+            let gcode = GCodeExporter::generate_gcode(&img, &config)?;
+            std::fs::write(&output, gcode)?;
+            let elapsed = start.elapsed();
+            println!(
+                "Generated CNC G-code ({:?} hatch, arcs: {}) from {} -> {} in {:.2}ms",
+                hatch_style,
+                arc_fitting,
                 input.display(),
                 output.display(),
                 elapsed.as_secs_f64() * 1000.0

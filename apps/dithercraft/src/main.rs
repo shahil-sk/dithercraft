@@ -536,6 +536,9 @@ pub struct DitherCraftApp {
     tonal_shadow_threshold: u8,
     tonal_highlight_threshold: u8,
     tonal_feather: u8,
+
+    // Phase 9: Custom Threshold Matrix Workshop
+    custom_matrix: CustomMatrixDither,
 }
 
 impl DitherCraftApp {
@@ -688,6 +691,8 @@ impl DitherCraftApp {
             tonal_shadow_threshold: 85,
             tonal_highlight_threshold: 170,
             tonal_feather: 16,
+
+            custom_matrix: CustomMatrixDither::default(),
         }
     }
 
@@ -1112,6 +1117,7 @@ impl DitherCraftApp {
         let tonal_shadow_threshold = self.tonal_shadow_threshold;
         let tonal_highlight_threshold = self.tonal_highlight_threshold;
         let tonal_feather = self.tonal_feather;
+        let custom_matrix = self.custom_matrix.clone();
 
         self.is_rendering = true;
         let gen_id = self.render_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1136,6 +1142,8 @@ impl DitherCraftApp {
                     create_algorithm(&tonal_mid_algo).unwrap_or_else(|| Box::new(FloydSteinberg::default())),
                     create_algorithm(&tonal_highlight_algo).unwrap_or_else(|| Box::new(Atkinson::default())),
                 ))
+            } else if algo_name.to_lowercase().contains("custom threshold matrix") || algo_name.to_lowercase() == "custom" {
+                Box::new(custom_matrix)
             } else {
                 create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()))
             };
@@ -2518,6 +2526,11 @@ impl eframe::App for DitherCraftApp {
                     {
                         changed = true;
                     }
+                    if (query.is_empty() || "custom threshold matrix".contains(&query))
+                        && ui.selectable_value(&mut self.selected_algo, "Custom Threshold Matrix".into(), "Custom Threshold Matrix").clicked()
+                    {
+                        changed = true;
+                    }
                     for info in filtered {
                         if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
                             changed = true;
@@ -2607,6 +2620,51 @@ impl eframe::App for DitherCraftApp {
                         &mut preview_changed,
                     );
                     check_slider(ui, egui::Slider::new(&mut self.tonal_feather, 2..=48).text("Feathering"), &mut changed, &mut preview_changed);
+                }
+
+                if self.selected_algo.to_lowercase().contains("custom") {
+                    ui.separator();
+                    ui.label("Custom Matrix Workshop:");
+                    ui.label(format!("Active Matrix: {} ({}x{})", self.custom_matrix.name, self.custom_matrix.width, self.custom_matrix.height));
+                    ui.horizontal(|ui| {
+                        if ui.button("Spiral 4x4").clicked() {
+                            self.custom_matrix = CustomMatrixDither::default();
+                            changed = true;
+                        }
+                        if ui.button("Checker 2x2").clicked()
+                            && let Ok(m) = CustomMatrixDither::new("Checker 2x2", 2, 2, vec![64, 192, 192, 64])
+                        {
+                            self.custom_matrix = m;
+                            changed = true;
+                        }
+                        if ui.button("Bayer 4x4").clicked() {
+                            let bayer = vec![0, 128, 32, 160, 192, 64, 224, 96, 48, 176, 16, 144, 240, 112, 208, 80];
+                            if let Ok(m) = CustomMatrixDither::new("Bayer 4x4 Variant", 4, 4, bayer) {
+                                self.custom_matrix = m;
+                                changed = true;
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Import JSON...").clicked()
+                            && let Some(path) = rfd::FileDialog::new().add_filter("JSON Matrix", &["json"]).pick_file()
+                            && let Ok(json) = std::fs::read_to_string(&path)
+                            && let Ok(m) = CustomMatrixDither::from_json(&json)
+                        {
+                            self.status_text = format!("Imported matrix: {} ({}x{})", m.name, m.width, m.height);
+                            self.custom_matrix = m;
+                            changed = true;
+                        }
+                        if ui.button("Export JSON...").clicked() {
+                            let fname = format!("{}.json", self.custom_matrix.name.to_lowercase().replace(' ', "-"));
+                            if let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("JSON Matrix", &["json"]).save_file()
+                                && let Ok(json) = self.custom_matrix.to_json()
+                            {
+                                let _ = std::fs::write(&path, json);
+                                self.status_text = format!("Exported matrix to {}", path.display());
+                            }
+                        }
+                    });
                 }
             });
 
