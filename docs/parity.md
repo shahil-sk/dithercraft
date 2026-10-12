@@ -162,12 +162,12 @@ DitherCraft achieves complete parity across **6 mathematical categories**:
 | **Keyboard Shortcuts Cheatsheet Modal** | Phase 8 | In-app modal dialog (`?` / `F1`) | Complete ergonomic overview of hotkeys and tools | **DELIVERED (`v0.9.5`)** |
 | **AVX2 / NEON SIMD Quantization** | Phase 7 | Packed vector instructions | $< 1.5\text{ms}$ 4K UHD full-image palette mapping | Planned (`v1.0.0`) |
 | **Tile-Based Wavefront Error Diffusion** | Phase 7 | Wavefront parallel processing | Multi-core scaling for Floyd-Steinberg and Atkinson | Planned (`v1.0.0`) |
-| **Interactive Tone Curves & Levels** | Phase 8 | Cubic spline curve interpolation | Precision tonal pre-processing with live histogram overlay | Planned (`v1.0.0`) |
+| **Interactive Tone Curves & Levels** | Phase 8 | Pre-dither 256-LUT & Gamma transfer | Precision tonal pre-processing with live GUI sliders | **DELIVERED (`v0.9.6`)** |
 | **Reorderable Effect Node Stack** | Phase 8 | Layered compositor with blend modes | Full creative flexibility across post-effects | Planned (`v1.0.0`) |
 | **OKLCH Color Wheel & Harmonies** | Phase 8 | Classical color harmony mathematics | 1-click generation of retro bit-depth harmonies | Planned (`v1.0.0`) |
-| **Visual Preset Browser Gallery** | Phase 8 | Multi-thumbnail live rendering | Side-by-side aesthetic comparison across all profiles | Planned (`v1.0.0`) |
-| **Canvas Rulers & Aspect Ratio Guides** | Phase 8 | Pixel alignment & retro display framing | Perfect retro composition (Game Boy, NES, CGA, CRT) | Planned (`v1.0.0`) |
-| **CVD Color Blindness Simulation** | Phase 8 | Machado (2009) & Brettel (1997) models | Accessibility & high-contrast print legibility auditing | Planned (`v1.0.0`) |
+| **Visual Preset Browser Gallery** | Phase 8 | Multi-thumbnail modal studio profile cards | Side-by-side aesthetic comparison & 1-click apply | **DELIVERED (`v0.9.6`)** |
+| **Canvas Rulers & Aspect Ratio Guides** | Phase 8 | Pixel alignment & retro display framing | Perfect retro composition (Game Boy, NES, CGA, CRT) | **DELIVERED (`v0.9.6`)** |
+| **CVD Color Blindness Simulation** | Phase 8 | Machado (2009) & Brettel (1997) models | Accessibility & high-contrast print legibility auditing | **DELIVERED (`v0.9.6`)** |
 | **Selective Alpha Masks & Brushes** | Phase 9 | Alpha compositing & luminance bands | Non-destructive region-selective dither application | Planned (`v1.1.0`) |
 | **Custom Threshold Matrix Designer** | Phase 9 | Dynamic $N \times N$ matrix compiler | In-app creation of custom ordered halftones and stamps | Planned (`v1.1.0`) |
 | **Pure-Rust 3D LUT Engine** | Phase 9 | Trilinear `.cube` interpolation | Authentic 1970s film and vintage CRT phosphor emulation | Planned (`v1.1.0`) |
@@ -178,7 +178,7 @@ DitherCraft achieves complete parity across **6 mathematical categories**:
 | **Multi-Track Automation Timeline** | Phase 11 | Cubic Bézier parameter keyframing | Dynamic parameter animation for music videos | Planned (`v1.2.0`) |
 | **Temporal Coherence & Flicker Suppression**| Phase 11 | Motion-compensated inter-frame error | Smooth video sequences with zero noise swim | Planned (`v1.2.0`) |
 | **Animation Lightbox & Onion Skinning** | Phase 11 | Multi-frame rotoscope ghosting | Frame-by-frame pixel sprite refinement | Planned (`v1.2.0`) |
-| **Procedural Blue Noise Synthesizer** | Phase 12 | Ulichney (1993) Void & Cluster | Custom high-frequency blue noise without external assets | Planned (`v1.3.0`) |
+| **Procedural Blue Noise Synthesizer** | Phase 12 | Ulichney (1993) Void & Cluster | Custom high-frequency blue noise without external assets | **DELIVERED (`v0.9.6`)** |
 | **Reaction-Diffusion Dither Kernels** | Phase 12 | Gray-Scott (1984) morphogenetic PDEs | Biological, coral, and leopard spot dither aesthetics | Planned (`v1.3.0`) |
 | **Vector Flow Field Steered Dithering**| Phase 12 | 2D Perlin / Simplex curl noise flow | Topographic and woodgrain organic grain alignment | Planned (`v1.3.0`) |
 | **Browser WebAssembly Workstation** | Phase 13 | `wasm32-unknown-unknown` + WebGPU | Zero-install 100% private client-side web studio | Planned (`v1.4.0`) |

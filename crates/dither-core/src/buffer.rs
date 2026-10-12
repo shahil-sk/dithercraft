@@ -195,6 +195,20 @@ impl ImageBuffer {
             *b = lut[*b as usize];
         }
     }
+
+    /// Apply Color Vision Deficiency simulation in-place across the image buffer.
+    pub fn apply_cvd_simulation(&mut self, mode: crate::color::CvdMode) {
+        if mode == crate::color::CvdMode::Normal {
+            return;
+        }
+        for chunk in self.data.chunks_exact_mut(3) {
+            let px = RgbColor::new(chunk[0], chunk[1], chunk[2]);
+            let sim = px.simulate_cvd(mode);
+            chunk[0] = sim.r;
+            chunk[1] = sim.g;
+            chunk[2] = sim.b;
+        }
+    }
 }
 
 use std::sync::Mutex;

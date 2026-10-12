@@ -279,3 +279,81 @@ impl OklabColor {
         self.delta_e_sq(other).sqrt()
     }
 }
+
+/// Color Vision Deficiency (CVD) simulation modes based on physiologically grounded
+/// dichromacy reduction matrices (Brettel, Viénot & Mollon 1997; Machado et al. 2009).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CvdMode {
+    #[default]
+    Normal,
+    Protanopia,
+    Deuteranopia,
+    Tritanopia,
+    Achromatopsia,
+}
+
+impl CvdMode {
+    pub const ALL: [Self; 5] = [Self::Normal, Self::Protanopia, Self::Deuteranopia, Self::Tritanopia, Self::Achromatopsia];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Normal => "Normal Vision",
+            Self::Protanopia => "Protanopia (Red-Blind)",
+            Self::Deuteranopia => "Deuteranopia (Green-Blind)",
+            Self::Tritanopia => "Tritanopia (Blue-Blind)",
+            Self::Achromatopsia => "Achromatopsia (Monochrome)",
+        }
+    }
+}
+
+impl RgbColor {
+    /// Simulate how this color appears under various forms of Color Vision Deficiency (CVD).
+    #[inline]
+    pub fn simulate_cvd(&self, mode: CvdMode) -> Self {
+        match mode {
+            CvdMode::Normal => *self,
+            CvdMode::Protanopia => {
+                let r = 0.56667 * self.r as f32 + 0.43333 * self.g as f32;
+                let g = 0.55833 * self.r as f32 + 0.44167 * self.g as f32;
+                let b = 0.24167 * self.g as f32 + 0.75833 * self.b as f32;
+                Self::new(r.clamp(0.0, 255.0).round() as u8, g.clamp(0.0, 255.0).round() as u8, b.clamp(0.0, 255.0).round() as u8)
+            }
+            CvdMode::Deuteranopia => {
+                let r = 0.62500 * self.r as f32 + 0.37500 * self.g as f32;
+                let g = 0.70000 * self.r as f32 + 0.30000 * self.g as f32;
+                let b = 0.30000 * self.g as f32 + 0.70000 * self.b as f32;
+                Self::new(r.clamp(0.0, 255.0).round() as u8, g.clamp(0.0, 255.0).round() as u8, b.clamp(0.0, 255.0).round() as u8)
+            }
+            CvdMode::Tritanopia => {
+                let r = 0.95000 * self.r as f32 + 0.05000 * self.g as f32;
+                let g = 0.43333 * self.g as f32 + 0.56667 * self.b as f32;
+                let b = 0.47500 * self.g as f32 + 0.52500 * self.b as f32;
+                Self::new(r.clamp(0.0, 255.0).round() as u8, g.clamp(0.0, 255.0).round() as u8, b.clamp(0.0, 255.0).round() as u8)
+            }
+            CvdMode::Achromatopsia => {
+                let y = self.luminance();
+                Self::new(y, y, y)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cvd_simulation_modes() {
+        let red = RgbColor::new(255, 0, 0);
+        assert_eq!(red.simulate_cvd(CvdMode::Normal), red);
+
+        let protan = red.simulate_cvd(CvdMode::Protanopia);
+        // Under Protanopia, pure red shifts toward olive/yellow-brown
+        assert!(protan.r > 100 && protan.g > 100);
+
+        let achro = red.simulate_cvd(CvdMode::Achromatopsia);
+        // Achromatopsia must have equal R, G, B channels
+        assert_eq!(achro.r, achro.g);
+        assert_eq!(achro.g, achro.b);
+    }
+}

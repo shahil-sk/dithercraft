@@ -192,7 +192,7 @@ fn test_stackable_effects() {
 }
 
 #[test]
-fn test_all_63_algorithms_instantiation_and_execution() {
+fn test_all_64_algorithms_instantiation_and_execution() {
     let mut input = ImageBuffer::new(32, 32).expect("create test buffer");
     for y in 0..32 {
         for x in 0..32 {
@@ -206,7 +206,7 @@ fn test_all_63_algorithms_instantiation_and_execution() {
     let pal = Palette::game_boy();
     let empty_pal = Palette { name: "empty".into(), swatches: vec![], metric: dither_core::ColorMetric::default() };
 
-    assert!(ALL_ALGORITHMS.len() >= 63, "Expected at least 63 algorithms, got {}", ALL_ALGORITHMS.len());
+    assert_eq!(ALL_ALGORITHMS.len(), 64, "Expected exactly 64 algorithms, got {}", ALL_ALGORITHMS.len());
 
     for info in ALL_ALGORITHMS {
         let algo_opt = create_algorithm(info.name);

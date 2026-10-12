@@ -275,3 +275,123 @@ impl DitherAlgorithm for TriangularNoise {
         Ok(out)
     }
 }
+
+/// Procedural Blue Noise Generator using Robert Ulichney's Void and Cluster method (1993).
+/// Synthesizes an isotropic high-frequency threshold matrix of size `N x N` on a toroidal grid.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProceduralBlueNoise;
+
+impl ProceduralBlueNoise {
+    /// Generate an `N x N` blue noise threshold matrix scaled to 0..=255.
+    /// `size` will be clamped between 4 and 64 for rapid interactive generation.
+    pub fn generate_matrix(size: usize) -> Vec<u8> {
+        let n = size.clamp(4, 64);
+        let total = n * n;
+        let mut matrix = vec![0u8; total];
+
+        let sigma = 1.5_f32;
+        let two_sigma_sq = 2.0 * sigma * sigma;
+
+        let mut binary_pattern = vec![false; total];
+        let mut ranks = vec![0usize; total];
+
+        let toroidal_dist_sq = |x1: usize, y1: usize, x2: usize, y2: usize, n: usize| -> f32 {
+            let dx = (x1 as isize - x2 as isize).abs();
+            let dy = (y1 as isize - y2 as isize).abs();
+            let dx_toroidal = dx.min(n as isize - dx) as f32;
+            let dy_toroidal = dy.min(n as isize - dy) as f32;
+            dx_toroidal * dx_toroidal + dy_toroidal * dy_toroidal
+        };
+
+        binary_pattern[0] = true;
+        ranks[0] = 0;
+
+        let mut energy = vec![0.0_f32; total];
+        for (idx, e) in energy.iter_mut().enumerate() {
+            let x = idx % n;
+            let y = idx / n;
+            let d2 = toroidal_dist_sq(x, y, 0, 0, n);
+            *e = (-d2 / two_sigma_sq).exp();
+        }
+
+        for rank in 1..total {
+            let mut min_energy = f32::MAX;
+            let mut best_idx = 0;
+            for (idx, &is_set) in binary_pattern.iter().enumerate() {
+                if !is_set && energy[idx] < min_energy {
+                    min_energy = energy[idx];
+                    best_idx = idx;
+                }
+            }
+
+            binary_pattern[best_idx] = true;
+            ranks[best_idx] = rank;
+
+            let bx = best_idx % n;
+            let by = best_idx / n;
+            for (idx, e) in energy.iter_mut().enumerate() {
+                let x = idx % n;
+                let y = idx / n;
+                let d2 = toroidal_dist_sq(x, y, bx, by, n);
+                *e += (-d2 / two_sigma_sq).exp();
+            }
+        }
+
+        for (i, &r) in ranks.iter().enumerate() {
+            matrix[i] = ((r * 255) / (total - 1).max(1)) as u8;
+        }
+
+        matrix
+    }
+}
+
+impl DitherAlgorithm for ProceduralBlueNoise {
+    fn name(&self) -> &'static str {
+        "Procedural Blue Noise"
+    }
+
+    fn apply(&self, input: &ImageBuffer, palette: &Palette) -> Result<ImageBuffer, DitherError> {
+        if palette.is_empty() {
+            return Err(DitherError::EmptyPalette);
+        }
+        let matrix = Self::generate_matrix(16);
+        let mut out = ImageBuffer::new(input.width, input.height)?;
+        let width = input.width as usize;
+
+        out.data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row_out)| {
+            let row_in = y * width * 3;
+            let mat_y = (y % 16) * 16;
+
+            for x in 0..width {
+                let mask_val = matrix[mat_y + (x % 16)] as i32;
+                let bias = ((mask_val - 128) * 255) / 256;
+
+                let in_idx = row_in + x * 3;
+                let r = (input.data[in_idx] as i32 + bias).clamp(0, 255) as u8;
+                let g = (input.data[in_idx + 1] as i32 + bias).clamp(0, 255) as u8;
+                let b = (input.data[in_idx + 2] as i32 + bias).clamp(0, 255) as u8;
+
+                let q = palette.find_nearest(&RgbColor::new(r, g, b));
+                let out_idx = x * 3;
+                row_out[out_idx] = q.r;
+                row_out[out_idx + 1] = q.g;
+                row_out[out_idx + 2] = q.b;
+            }
+        });
+
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_procedural_blue_noise_matrix_generation() {
+        let mat = ProceduralBlueNoise::generate_matrix(8);
+        assert_eq!(mat.len(), 64);
+        assert_eq!(mat.iter().min(), Some(&0));
+        assert_eq!(mat.iter().max(), Some(&255));
+    }
+}

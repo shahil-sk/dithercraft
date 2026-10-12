@@ -3,7 +3,7 @@
 use dither_core::{
     AudioSpectrum, AudioTrack, ImageBuffer, Mp4Demuxer, WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
     algorithms::*,
-    color::RgbColor,
+    color::{CvdMode, RgbColor},
     effects::*,
     palette::{ColorMetric, Palette, Swatch},
     temporal::TemporalNoisePattern,
@@ -101,6 +101,57 @@ impl SplitViewMode {
     }
 }
 
+/// Retro Aspect Ratio Framing Guides for pixel-authentic composition preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RetroAspectGuide {
+    #[default]
+    None,
+    GameBoy,     // 10:9 (160x144)
+    NesSnes,     // 8:7 (256x224 active)
+    StandardCrt, // 4:3 (320x240 / standard CRT)
+    ArcadeTate,  // 3:4 (vertical arcade)
+    Square,      // 1:1
+    Widescreen,  // 16:9
+}
+
+impl RetroAspectGuide {
+    pub const ALL: [Self; 7] = [Self::None, Self::GameBoy, Self::NesSnes, Self::StandardCrt, Self::ArcadeTate, Self::Square, Self::Widescreen];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::None => "None (Full Frame)",
+            Self::GameBoy => "Game Boy (10:9)",
+            Self::NesSnes => "NES / SNES (8:7)",
+            Self::StandardCrt => "Standard CRT (4:3)",
+            Self::ArcadeTate => "Arcade Tate (3:4)",
+            Self::Square => "Square (1:1)",
+            Self::Widescreen => "Widescreen (16:9)",
+        }
+    }
+
+    pub fn aspect_ratio(&self) -> Option<f32> {
+        match self {
+            Self::None => None,
+            Self::GameBoy => Some(10.0 / 9.0),
+            Self::NesSnes => Some(8.0 / 7.0),
+            Self::StandardCrt => Some(4.0 / 3.0),
+            Self::ArcadeTate => Some(3.0 / 4.0),
+            Self::Square => Some(1.0),
+            Self::Widescreen => Some(16.0 / 9.0),
+        }
+    }
+}
+
+fn default_levels_black() -> u8 {
+    0
+}
+fn default_levels_white() -> u8 {
+    255
+}
+fn default_levels_gamma() -> f32 {
+    1.0
+}
+
 /// Workstation snapshot capturing complete algorithm, palette, and effects configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StudioPreset {
@@ -109,6 +160,15 @@ pub struct StudioPreset {
     pub palette_name: String,
     pub metric: ColorMetric,
     pub tonal_cycle_step: usize,
+
+    #[serde(default = "default_levels_black")]
+    pub levels_black: u8,
+    #[serde(default = "default_levels_white")]
+    pub levels_white: u8,
+    #[serde(default = "default_levels_gamma")]
+    pub levels_gamma: f32,
+    #[serde(default)]
+    pub cvd_mode: CvdMode,
 
     pub glow_enabled: bool,
     pub glow_threshold: u8,
@@ -148,6 +208,10 @@ impl StudioPreset {
                 palette_name: "Game Boy".into(),
                 metric: ColorMetric::Redmean,
                 tonal_cycle_step: 0,
+                levels_black: 0,
+                levels_white: 255,
+                levels_gamma: 1.0,
+                cvd_mode: CvdMode::Normal,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -176,6 +240,10 @@ impl StudioPreset {
                 palette_name: "Cyberpunk".into(),
                 metric: ColorMetric::Oklab,
                 tonal_cycle_step: 0,
+                levels_black: 0,
+                levels_white: 255,
+                levels_gamma: 1.0,
+                cvd_mode: CvdMode::Normal,
                 glow_enabled: true,
                 glow_threshold: 160,
                 glow_radius: 6,
@@ -204,6 +272,10 @@ impl StudioPreset {
                 palette_name: "Commodore 64".into(),
                 metric: ColorMetric::Ciede2000,
                 tonal_cycle_step: 0,
+                levels_black: 0,
+                levels_white: 255,
+                levels_gamma: 1.0,
+                cvd_mode: CvdMode::Normal,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -232,6 +304,10 @@ impl StudioPreset {
                 palette_name: "Monochrome".into(),
                 metric: ColorMetric::Oklab,
                 tonal_cycle_step: 0,
+                levels_black: 0,
+                levels_white: 255,
+                levels_gamma: 1.0,
+                cvd_mode: CvdMode::Normal,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -260,6 +336,10 @@ impl StudioPreset {
                 palette_name: "Macintosh 1-bit".into(),
                 metric: ColorMetric::EuclideanRgb,
                 tonal_cycle_step: 0,
+                levels_black: 0,
+                levels_white: 255,
+                levels_gamma: 1.0,
+                cvd_mode: CvdMode::Normal,
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -410,6 +490,12 @@ pub struct DitherCraftApp {
     snapshots: [Option<StudioPreset>; 4],
     show_loupe: bool,
     show_shortcuts_dialog: bool,
+    levels_black: u8,
+    levels_white: u8,
+    levels_gamma: f32,
+    cvd_mode: CvdMode,
+    aspect_guide: RetroAspectGuide,
+    show_preset_gallery: bool,
 }
 
 impl DitherCraftApp {
@@ -538,6 +624,12 @@ impl DitherCraftApp {
             snapshots: [None, None, None, None],
             show_loupe: false,
             show_shortcuts_dialog: false,
+            levels_black: 0,
+            levels_white: 255,
+            levels_gamma: 1.0,
+            cvd_mode: CvdMode::Normal,
+            aspect_guide: RetroAspectGuide::None,
+            show_preset_gallery: false,
         }
     }
 
@@ -751,6 +843,11 @@ impl DitherCraftApp {
             sharpen_enabled: self.sharpen_enabled,
             sharpen_amount: self.sharpen_amount,
 
+            levels_black: self.levels_black,
+            levels_white: self.levels_white,
+            levels_gamma: self.levels_gamma,
+            cvd_mode: self.cvd_mode,
+
             temporal_enabled: self.temporal_noise_enabled,
             temporal_pattern: self.temporal_pattern,
             temporal_intensity: self.temporal_intensity,
@@ -803,6 +900,11 @@ impl DitherCraftApp {
         self.temporal_noise_enabled = preset.temporal_enabled;
         self.temporal_pattern = preset.temporal_pattern;
         self.temporal_intensity = preset.temporal_intensity;
+
+        self.levels_black = preset.levels_black;
+        self.levels_white = preset.levels_white;
+        self.levels_gamma = preset.levels_gamma;
+        self.cvd_mode = preset.cvd_mode;
 
         self.trigger_render();
     }
@@ -916,6 +1018,11 @@ impl DitherCraftApp {
         let temporal_opt =
             if self.temporal_noise_enabled { Some((self.temporal_pattern, self.frame_counter, self.temporal_intensity)) } else { None };
 
+        let levels_black = self.levels_black;
+        let levels_white = self.levels_white;
+        let levels_gamma = self.levels_gamma;
+        let cvd_mode = self.cvd_mode;
+
         self.is_rendering = true;
         let gen_id = self.render_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cancel_token = self.render_generation.clone();
@@ -930,7 +1037,12 @@ impl DitherCraftApp {
             let t_dither = Instant::now();
             let algo: Box<dyn DitherAlgorithm> = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
 
-            let mut out = algo.apply(&source, &palette).unwrap_or_else(|_| (*source).clone());
+            let mut input_buf = (*source).clone();
+            if levels_black > 0 || levels_white < 255 || (levels_gamma - 1.0).abs() > 0.001 {
+                input_buf.adjust_levels(levels_black, levels_white, levels_gamma);
+            }
+
+            let mut out = algo.apply(&input_buf, &palette).unwrap_or_else(|_| input_buf.clone());
             let dither_ms = t_dither.elapsed().as_secs_f64() * 1000.0;
 
             if cancel_token.load(Ordering::Relaxed) != gen_id {
@@ -963,6 +1075,9 @@ impl DitherCraftApp {
             }
             if let Some((pattern, frame, intensity)) = temporal_opt {
                 out = pattern.apply(&out, frame, intensity).unwrap_or(out);
+            }
+            if cvd_mode != CvdMode::Normal {
+                out.apply_cvd_simulation(cvd_mode);
             }
             let effects_ms = t_fx.elapsed().as_secs_f64() * 1000.0;
 
@@ -1722,6 +1837,11 @@ impl eframe::App for DitherCraftApp {
                 });
 
                 ui.menu_button("Presets", |ui| {
+                    if ui.button("🖼 Visual Preset Gallery...").clicked() {
+                        self.show_preset_gallery = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     ui.label("Curated Profiles:");
                     for p in StudioPreset::bundled_presets() {
                         if ui.button(&p.name).clicked() {
@@ -1801,6 +1921,19 @@ impl eframe::App for DitherCraftApp {
                     ui.checkbox(&mut self.show_pixel_grid, "Pixel Grid (>=800%)");
                     ui.checkbox(&mut self.split_view_enabled, "Split-View Comparison");
                     ui.checkbox(&mut self.debounce_mode, "Debounce Slider Preview");
+                    ui.separator();
+                    ui.label("Color Vision Deficiency (CVD):");
+                    for mode in CvdMode::ALL {
+                        if ui.selectable_label(self.cvd_mode == mode, mode.name()).clicked() {
+                            self.cvd_mode = mode;
+                            self.trigger_render();
+                        }
+                    }
+                    ui.separator();
+                    ui.label("Retro Aspect Ratio Framing Guide:");
+                    for guide in RetroAspectGuide::ALL {
+                        ui.selectable_value(&mut self.aspect_guide, guide, guide.label());
+                    }
                 });
 
                 ui.menu_button("Help", |ui| {
@@ -1895,6 +2028,65 @@ impl eframe::App for DitherCraftApp {
                 is_open = false;
             }
             self.show_shortcuts_dialog = is_open;
+        }
+
+        // Visual Preset Gallery Modal Dialog
+        if self.show_preset_gallery {
+            let mut is_open = true;
+            let mut preset_to_apply = None;
+            egui::Window::new("Visual Preset Gallery").resizable(true).default_width(620.0).default_height(420.0).open(&mut is_open).show(
+                ctx,
+                |ui| {
+                    ui.heading("Curated Studio Profiles");
+                    ui.label("Preview and instantly apply signature retro color grading, CRT simulation, and dither aesthetics.");
+                    ui.add_space(8.0);
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for p in StudioPreset::bundled_presets() {
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.strong(&p.name);
+                                        ui.label(format!("• Algorithm: {} | Palette: {}", p.algo, p.palette_name));
+                                        ui.horizontal(|ui| {
+                                            if p.crt_enabled {
+                                                ui.colored_label(Color32::from_rgb(255, 176, 0), "[CRT Scanlines]");
+                                            }
+                                            if p.glow_enabled {
+                                                ui.colored_label(Color32::from_rgb(130, 200, 255), "[Epsilon Bloom]");
+                                            }
+                                            if p.chromatic_enabled {
+                                                ui.colored_label(Color32::from_rgb(255, 120, 180), "[Chromatic]");
+                                            }
+                                            if p.sharpen_enabled {
+                                                ui.colored_label(Color32::from_rgb(180, 255, 120), "[Sharpen]");
+                                            }
+                                            if p.temporal_enabled {
+                                                ui.colored_label(Color32::from_rgb(220, 160, 255), "[Temporal Noise]");
+                                            }
+                                        });
+                                    });
+
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.button("Apply Preset").clicked() {
+                                            preset_to_apply = Some(p.clone());
+                                        }
+                                    });
+                                });
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+                },
+            );
+
+            if let Some(p) = preset_to_apply {
+                self.record_undo_state();
+                self.apply_preset(&p);
+                self.status_text = format!("Applied preset: {}", p.name);
+                is_open = false;
+            }
+            self.show_preset_gallery = is_open;
         }
 
         // Telemetry HUD Window
@@ -2036,6 +2228,33 @@ impl eframe::App for DitherCraftApp {
 
             let mut changed = false;
             let mut preview_changed = false;
+
+            // Pre-Dither Tone Levels & Gamma
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Input Levels & Gamma:");
+                    if ui.button("↺ Reset").on_hover_text("Reset Tone Levels (Black 0, White 255, Gamma 1.0)").clicked() {
+                        self.levels_black = 0;
+                        self.levels_white = 255;
+                        self.levels_gamma = 1.0;
+                        changed = true;
+                    }
+                });
+                check_slider(ui, egui::Slider::new(&mut self.levels_black, 0..=254).text("Black Point"), &mut changed, &mut preview_changed);
+                if self.levels_black >= self.levels_white {
+                    self.levels_white = self.levels_black + 1;
+                }
+                check_slider(ui, egui::Slider::new(&mut self.levels_white, 1..=255).text("White Point"), &mut changed, &mut preview_changed);
+                if self.levels_white <= self.levels_black {
+                    self.levels_black = self.levels_white.saturating_sub(1);
+                }
+                check_slider(
+                    ui,
+                    egui::Slider::new(&mut self.levels_gamma, 0.1..=3.0).text("Midtone Gamma").logarithmic(true),
+                    &mut changed,
+                    &mut preview_changed,
+                );
+            });
 
             // Algorithm Search & Picker
             ui.group(|ui| {
@@ -2417,8 +2636,55 @@ impl eframe::App for DitherCraftApp {
                     }
                 }
 
+                // Retro Aspect Ratio Framing Guide Overlay
+                if let Some(target_ar) = self.aspect_guide.aspect_ratio() {
+                    let current_ar = img_rect.width() / img_rect.height().max(1.0);
+                    let (gw, gh) = if current_ar > target_ar {
+                        let h = img_rect.height();
+                        let w = h * target_ar;
+                        (w, h)
+                    } else {
+                        let w = img_rect.width();
+                        let h = w / target_ar;
+                        (w, h)
+                    };
+                    let guide_rect = egui::Rect::from_center_size(img_rect.center(), egui::vec2(gw, gh));
+
+                    // Translucent letterboxing outside the guide
+                    let letterbox_fill = Color32::from_black_alpha(175);
+                    if guide_rect.min.y > img_rect.min.y {
+                        let top_r = egui::Rect::from_min_max(img_rect.min, egui::pos2(img_rect.max.x, guide_rect.min.y));
+                        clipped_painter.rect_filled(top_r, 0.0, letterbox_fill);
+                    }
+                    if guide_rect.max.y < img_rect.max.y {
+                        let bot_r = egui::Rect::from_min_max(egui::pos2(img_rect.min.x, guide_rect.max.y), img_rect.max);
+                        clipped_painter.rect_filled(bot_r, 0.0, letterbox_fill);
+                    }
+                    if guide_rect.min.x > img_rect.min.x {
+                        let left_r =
+                            egui::Rect::from_min_max(egui::pos2(img_rect.min.x, guide_rect.min.y), egui::pos2(guide_rect.min.x, guide_rect.max.y));
+                        clipped_painter.rect_filled(left_r, 0.0, letterbox_fill);
+                    }
+                    if guide_rect.max.x < img_rect.max.x {
+                        let right_r =
+                            egui::Rect::from_min_max(egui::pos2(guide_rect.max.x, guide_rect.min.y), egui::pos2(img_rect.max.x, guide_rect.max.y));
+                        clipped_painter.rect_filled(right_r, 0.0, letterbox_fill);
+                    }
+
+                    // Stroke frame and label
+                    let frame_stroke = egui::Stroke::new(1.5_f32, Color32::from_rgb(255, 215, 0));
+                    clipped_painter.rect_stroke(guide_rect, 0.0, frame_stroke);
+                    clipped_painter.text(
+                        guide_rect.min + egui::vec2(6.0, 6.0),
+                        egui::Align2::LEFT_TOP,
+                        self.aspect_guide.label(),
+                        egui::FontId::monospace(10.5),
+                        Color32::from_rgb(255, 215, 0),
+                    );
+                }
+
                 // Floating Viewport HUD
-                let hud_size = egui::vec2(340.0, 34.0);
+                let hud_size = egui::vec2(440.0, 34.0);
                 let hud_rect = egui::Rect::from_min_size(egui::pos2(available_rect.max.x - hud_size.x - 16.0, available_rect.min.y + 16.0), hud_size);
 
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(hud_rect), |ui| {
@@ -2445,6 +2711,11 @@ impl eframe::App for DitherCraftApp {
                             ui.separator();
                             ui.checkbox(&mut self.show_pixel_grid, "Grid");
                             ui.checkbox(&mut self.show_loupe, "Loupe");
+                            if self.aspect_guide != RetroAspectGuide::None
+                                && ui.small_button("Clear Frame").on_hover_text("Clear aspect ratio guide").clicked()
+                            {
+                                self.aspect_guide = RetroAspectGuide::None;
+                            }
                         });
                     });
                 });
@@ -2731,4 +3002,40 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions { viewport, ..Default::default() };
 
     eframe::run_native("DitherCraft", native_options, Box::new(|cc| Ok(Box::new(DitherCraftApp::new(cc)))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_retro_aspect_guide_ratios_and_labels() {
+        for guide in RetroAspectGuide::ALL {
+            assert!(!guide.label().is_empty());
+        }
+        assert_eq!(RetroAspectGuide::None.aspect_ratio(), None);
+        assert!((RetroAspectGuide::GameBoy.aspect_ratio().unwrap() - 10.0 / 9.0).abs() < 1e-4);
+        assert!((RetroAspectGuide::NesSnes.aspect_ratio().unwrap() - 8.0 / 7.0).abs() < 1e-4);
+        assert!((RetroAspectGuide::StandardCrt.aspect_ratio().unwrap() - 4.0 / 3.0).abs() < 1e-4);
+        assert!((RetroAspectGuide::ArcadeTate.aspect_ratio().unwrap() - 3.0 / 4.0).abs() < 1e-4);
+        assert!((RetroAspectGuide::Square.aspect_ratio().unwrap() - 1.0).abs() < 1e-4);
+        assert!((RetroAspectGuide::Widescreen.aspect_ratio().unwrap() - 16.0 / 9.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_studio_preset_serde_and_bundled_presets() {
+        let presets = StudioPreset::bundled_presets();
+        assert!(!presets.is_empty());
+        for p in &presets {
+            let json = serde_json::to_string(p).expect("serialize preset");
+            let de: StudioPreset = serde_json::from_str(&json).expect("deserialize preset");
+            assert_eq!(de.name, p.name);
+            assert_eq!(de.levels_black, p.levels_black);
+            assert_eq!(de.levels_white, p.levels_white);
+            assert_eq!(de.cvd_mode, p.cvd_mode);
+        }
+        assert_eq!(default_levels_black(), 0);
+        assert_eq!(default_levels_white(), 255);
+        assert!((default_levels_gamma() - 1.0).abs() < 1e-4);
+    }
 }

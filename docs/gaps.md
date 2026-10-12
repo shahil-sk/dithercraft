@@ -130,6 +130,31 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
 - **Current Status**: **RESOLVED** (`v0.9.5`).
   - Implemented structured keyboard shortcut cheatsheet modal dialog (`?` / `F1`) documenting canvas navigation, zoom shortcuts, A/B snapshots, and loupe hotkeys.
 
+### 2.21 Procedural Blue Noise Synthesis (Robert Ulichney Void-and-Cluster 1993)
+- **Current Status**: **RESOLVED** (`v0.9.6`).
+  - Implemented pure-Rust `ProceduralBlueNoise::generate_matrix(size)` in `dither-core::algorithms::modulation` synthesizing isotropic high-frequency threshold matrices on a toroidal grid.
+  - Implemented `DitherAlgorithm for ProceduralBlueNoise`, registering the 64th algorithm in `ALL_ALGORITHMS` and `create_algorithm`.
+
+### 2.22 Color Vision Deficiency (CVD) Dichromacy Simulation
+- **Current Status**: **RESOLVED** (`v0.9.6`).
+  - Implemented physiologically grounded dichromacy reduction matrices in `dither-core::color` (`CvdMode` and `RgbColor::simulate_cvd`) covering Protanopia (red-blind), Deuteranopia (green-blind), Tritanopia (blue-blind), and Achromatopsia (monochrome luminance).
+  - Implemented in-place `ImageBuffer::apply_cvd_simulation` and wired preview selector in desktop workstation View menu.
+
+### 2.23 Pre-Dither Tone Levels & Midtone Gamma Workstation Sliders
+- **Current Status**: **RESOLVED** (`v0.9.6`).
+  - Wired `ImageBuffer::adjust_levels(black, white, gamma)` into `apps/dithercraft` left panel with real-time responsive sliders and 1-click reset.
+  - Added pre-dither transfer curve application into the background Rayon worker thread prior to spatial kernel quantization.
+
+### 2.24 Retro Aspect Ratio Framing Guides (Letterbox & Pillarbox Overlay)
+- **Current Status**: **RESOLVED** (`v0.9.6`).
+  - Implemented `RetroAspectGuide` supporting Game Boy (10:9 / 160×144), NES/SNES (8:7 / 256×224 active), Standard CRT (4:3 / 320×240), Arcade Tate (3:4), Square (1:1), and Widescreen (16:9).
+  - Rendered translucent letterbox/pillarbox masks with crisp golden framing strokes and watermark labels dynamically centered across pan and zoom levels.
+
+### 2.25 Visual Preset Gallery Modal with One-Click Profile Application
+- **Current Status**: **RESOLVED** (`v0.9.6`).
+  - Implemented `Visual Preset Gallery` modal window accessible via Presets menu.
+  - Displays interactive profile cards for all bundled studio configurations (Game Boy, Cyberpunk, VHS, Newspaper, Macintosh) with active effect tags and one-click instant application.
+
 ---
 
 ## 3. Active Next-Gen Capability & Performance Vectors (Phases 7–13)

@@ -13,7 +13,9 @@ pub use error_diffusion::{
     Sierra2, Sierra3, SierraLite, StevensonArce, Stucki, VariableError,
 };
 pub use halftone::{CircularScreen, CrosshatchHalftone, DiamondDot, EllipticalDot, LineScreen, RotatedScreen};
-pub use modulation::{AmplitudeModulation, BlueNoiseFM, StochasticScreening, TriangularNoise, UniformRandomNoise, VoidAndCluster};
+pub use modulation::{
+    AmplitudeModulation, BlueNoiseFM, ProceduralBlueNoise, StochasticScreening, TriangularNoise, UniformRandomNoise, VoidAndCluster,
+};
 pub use ordered::{
     Bayer2x2, Bayer4x4, Bayer8x8, Bayer16x16, CentralWhitePoint, Checkerboard45, ClusteredDot4x4, ClusteredDot8x8, DiagonalLines, DispersedDot,
     HorizontalLines, InterleavedGradientNoise, Spiral, VerticalLines,
@@ -53,7 +55,7 @@ pub struct AlgorithmInfo {
     pub category: AlgorithmCategory,
 }
 
-/// Static registry of all 63 algorithms in DitherCraft.
+/// Static registry of all 64 algorithms in DitherCraft.
 pub static ALL_ALGORITHMS: &[AlgorithmInfo] = &[
     // 1. Error-Diffusion (17)
     AlgorithmInfo { name: "Floyd-Steinberg", category: AlgorithmCategory::ErrorDiffusion },
@@ -106,13 +108,14 @@ pub static ALL_ALGORITHMS: &[AlgorithmInfo] = &[
     AlgorithmInfo { name: "Elliptical Dot", category: AlgorithmCategory::HalftoneArrays },
     AlgorithmInfo { name: "Line Screen", category: AlgorithmCategory::HalftoneArrays },
     AlgorithmInfo { name: "Crosshatch Halftone", category: AlgorithmCategory::HalftoneArrays },
-    // 5. Modulation Systems (6)
+    // 5. Modulation Systems (7)
     AlgorithmInfo { name: "Void-and-Cluster", category: AlgorithmCategory::ModulationSystems },
     AlgorithmInfo { name: "Frequency Modulation (Blue Noise)", category: AlgorithmCategory::ModulationSystems },
     AlgorithmInfo { name: "Amplitude Modulation", category: AlgorithmCategory::ModulationSystems },
     AlgorithmInfo { name: "Stochastic Screening", category: AlgorithmCategory::ModulationSystems },
     AlgorithmInfo { name: "Uniform Random Noise", category: AlgorithmCategory::ModulationSystems },
     AlgorithmInfo { name: "Triangular Noise (TPDF)", category: AlgorithmCategory::ModulationSystems },
+    AlgorithmInfo { name: "Procedural Blue Noise", category: AlgorithmCategory::ModulationSystems },
     // 6. Custom Artistic Tones (6)
     AlgorithmInfo { name: "Mezzotint", category: AlgorithmCategory::CustomArtisticTones },
     AlgorithmInfo { name: "Stippling", category: AlgorithmCategory::CustomArtisticTones },
@@ -194,6 +197,7 @@ pub fn create_algorithm(name: &str) -> Option<Box<dyn DitherAlgorithm>> {
         "stochasticscreening" | "stochastic" => Some(Box::new(StochasticScreening)),
         "uniformrandomnoise" | "uniformnoise" => Some(Box::new(UniformRandomNoise)),
         "triangularnoisetpdf" | "triangularnoise" | "tpdf" => Some(Box::new(TriangularNoise)),
+        "proceduralbluenoise" | "proceduralbluenoisevoidandcluster" => Some(Box::new(ProceduralBlueNoise)),
 
         // Custom Artistic Tones
         "mezzotint" => Some(Box::new(Mezzotint::default())),
