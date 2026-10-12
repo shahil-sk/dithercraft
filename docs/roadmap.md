@@ -204,7 +204,7 @@ Focus: Push pixel-throughput past 1 Gigapixel/sec on modern multi-core x86_64 an
 Focus: Modernize the desktop workstation into an intuitive, visually polished, studio-grade creative tool matching premier graphics software.
 
 ### 8.1 Interactive Tone Curves & Levels Histogram Editor
-- [ ] **Dual-Tone Curves Panel**:
+- [x] **Dual-Tone Curves Panel** (DELIVERED in `v0.9.8`):
   - Interactive cubic spline curve editor for Master Luminance, Red, Green, and Blue channels.
   - Real-time overlay of pre-dither input histogram and post-curve output distribution.
   - Black point, White point, and Midtone Gamma ($0.1\text{--}3.0$) draggable pins with numerical readouts.
@@ -433,7 +433,7 @@ Focus: Elevate DitherCraft into a modular, dockable, high-efficiency creative wo
   - Support detaching the primary rendering canvas onto a secondary physical monitor for full-screen zero-distraction studio monitoring.
 
 ### 14.2 Command Palette & Fast Navigation (`Ctrl+K` / `Cmd+K`)
-- [ ] **Universal Fuzzy Action Search**:
+- [x] **Universal Fuzzy Action Search** (DELIVERED in `v0.9.8`):
   - Modal command launcher with instant fuzzy matching across:
     - All 64 dither algorithms and mathematical variants
     - 30+ bundled retro hardware and printmaking presets
