@@ -711,3 +711,30 @@ fn test_custom_matrix_workshop() {
     assert_eq!(loaded.width, 2);
     assert_eq!(loaded.height, 2);
 }
+
+#[test]
+fn test_generative_morphogenesis_and_flow_field() {
+    use dither_core::{FlowFieldConfig, FlowFieldSteeredDither, ReactionDiffusionConfig, ReactionDiffusionDither, ReactionDiffusionMorphology};
+
+    let mut buf = ImageBuffer::new(24, 24).expect("buf");
+    for y in 0..24 {
+        for x in 0..24 {
+            buf.set_pixel(x, y, RgbColor::new(140, 140, 140));
+        }
+    }
+    let pal = Palette::game_boy();
+
+    // 1. Gray-Scott morphogenesis dither
+    let morph_config = ReactionDiffusionConfig { morphology: ReactionDiffusionMorphology::Coral, steps: 8, ..Default::default() };
+    let rd_dither = ReactionDiffusionDither::new(morph_config);
+    let rd_out = rd_dither.apply(&buf, &pal).expect("rd apply");
+    assert_eq!(rd_out.width, 24);
+    assert_eq!(rd_out.height, 24);
+
+    // 2. Vector flow field steered dither
+    let flow_config = FlowFieldConfig { scale: 0.08, swirl: 2.0, angle_offset: 0.5 };
+    let flow_dither = FlowFieldSteeredDither::new(flow_config);
+    let flow_out = flow_dither.apply(&buf, &pal).expect("flow apply");
+    assert_eq!(flow_out.width, 24);
+    assert_eq!(flow_out.height, 24);
+}

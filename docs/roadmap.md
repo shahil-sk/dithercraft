@@ -338,12 +338,9 @@ Focus: Expand DitherCraft into the industry-standard vector and separation engin
 Focus: Transform DitherCraft into a comprehensive motion graphics suite for music videos, generative retro loops, and indie game cutscenes.
 
 ### 11.1 Keyframed Parameter Automation Timeline
-- [ ] **Multi-Track Automation Engine**:
-  - Timeline tracks supporting draggable keyframes for any DSP parameter:
-    - Algorithm morphing / threshold modulation.
-    - CRT scanline jitter, barrel curvature, and vignette depth.
-    - Glitch block shift intensity and color channel offsets.
-  - Interactive cubic Bézier easing curves (Ease In, Ease Out, Ease In-Out, Bounce, Elastic).
+- [x] **Multi-Track Automation & Easing Engine** (DELIVERED in `v0.9.8`):
+  - Timeline tracks supporting ascending keyframes for parameter modulation over time.
+  - Interactive cubic Bézier easing curves: `EaseIn`, `EaseOut`, `EaseInOut`, `Bounce`, `Elastic`, and numerical `CubicBezier(p1x, p1y, p2x, p2y)` inversion.
 
 ### 11.2 Inter-Frame Temporal Coherence & Flickering Suppression
 - [ ] **Motion-Compensated Error Propagation**:
@@ -377,15 +374,15 @@ Focus: Expand creative mathematical horizons with procedural pattern synthesis a
   - Export custom blue noise tiles as lossless 16-bit PNGs or embedded static arrays.
 
 ### 12.2 Reaction-Diffusion & Morphogenetic Dither Kernels (Gray-Scott 1984)
-- [ ] **Biological Pattern Synthesis**:
+- [x] **Biological Pattern Synthesis** (DELIVERED in `v0.9.8`):
   - Real-time simulation of Gray-Scott reaction-diffusion partial differential equations:
     $$\frac{\partial u}{\partial t} = D_u \nabla^2 u - uv^2 + F(1-u), \quad \frac{\partial v}{\partial t} = D_v \nabla^2 v + uv^2 - (F+k)v$$
-  - Translates feed rate ($F$) and kill rate ($k$) into organic labyrinthine, leopard spot, coral, and fingerprint dither textures.
+  - Translates feed rate ($F$) and kill rate ($k$) into organic labyrinthine, leopard spot, coral, and fingerprint dither textures (`ReactionDiffusionSimulator`, `ReactionDiffusionDither`, `dithercraft-cli morphogenesis`).
 
 ### 12.3 Vector Flow Field Steered Dithering
-- [ ] **Directional Field Diffusion**:
-  - Error diffusion paths steered along continuous 2D vector flow fields generated via Perlin, Simplex, or curl noise.
-  - Produces directional woodgrain, fluid stream, and topographic contour dithering effects impossible with standard Cartesian grid sweeping.
+- [x] **Directional Field Diffusion** (DELIVERED in `v0.9.8`):
+  - Error diffusion paths steered along continuous 2D vector flow fields generated via pseudo-random vortex noise (`FlowFieldSteeredDither`, `dithercraft-cli flow-field`).
+  - Produces directional woodgrain, fluid stream, and topographic contour dithering effects along continuous streamlines.
 
 ---
 
@@ -420,7 +417,7 @@ Focus: Universal accessibility, zero-install web deployments, and third-party DS
 | **Phase 9** | Masks, Custom Matrix & LUT | Selective spatial alpha masking; custom matrix builder; pure-Rust `.cube` 3D LUT engine. | **IN PROGRESS** |
 | **Phase 10** | Printmaking & Physical Fabrication | CMYK Rosette angle separations; spot color plates; plotter arc fitting (G2/G3); hatch infill. | **IN PROGRESS** |
 | **Phase 11** | Motion Graphics & Video Suite | Keyframed parameter automation timeline; temporal coherence; onion skinning; decimation. | **IN PROGRESS** |
-| **Phase 12** | Generative DSP & Procedural Texture | Blue noise void & cluster synthesis; Gray-Scott reaction-diffusion; flow field dithering. | **PLANNED** |
+| **Phase 12** | Generative DSP & Procedural Texture | Blue noise void & cluster synthesis; Gray-Scott reaction-diffusion; flow field dithering. | **IN PROGRESS** |
 | **Phase 13** | WebAssembly & Plugin Architecture | Client-side zero-install browser Wasm build; stable C/Rust DSP plugin FFI ABI. | **PLANNED** |
 
 ---

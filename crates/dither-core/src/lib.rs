@@ -16,6 +16,7 @@ pub mod color;
 pub mod color_depth;
 pub mod effects;
 pub mod error;
+pub mod generative;
 pub mod lut;
 pub mod palette;
 pub mod renderers;
@@ -31,6 +32,10 @@ pub use color::{ColorHarmony, CvdMode, LabColor, OklabColor, OklchColor, RgbColo
 pub use color_depth::{LuminosityMapping, MismatchMode};
 pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen, VintageCrtSimulation};
 pub use error::DitherError;
+pub use generative::{
+    FlowFieldConfig, FlowFieldSteeredDither, ReactionDiffusionConfig, ReactionDiffusionDither, ReactionDiffusionMorphology,
+    ReactionDiffusionSimulator,
+};
 pub use lut::Cube3dLut;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykChannel, CmykHalftone, CmykSeparationPlates, HalftoneDotShape, PopTone};

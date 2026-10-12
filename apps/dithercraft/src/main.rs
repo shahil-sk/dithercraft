@@ -1,8 +1,9 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use dither_core::{
-    AudioSpectrum, AudioTrack, CadenceMode, CmykHalftone, Cube3dLut, HalftoneDotShape, ImageBuffer, Mp4Demuxer, OnionSkinConfig, TonalBandDither,
-    WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
+    AudioSpectrum, AudioTrack, CadenceMode, CmykHalftone, Cube3dLut, FlowFieldConfig, FlowFieldSteeredDither, HalftoneDotShape, ImageBuffer,
+    Mp4Demuxer, OnionSkinConfig, ReactionDiffusionConfig, ReactionDiffusionDither, ReactionDiffusionMorphology, TonalBandDither, WebmDemuxer,
+    WebpAnimFrame, WebpAnimationMuxer,
     algorithms::*,
     color::{ColorHarmony, CvdMode, RgbColor},
     effects::*,
@@ -544,6 +545,12 @@ pub struct DitherCraftApp {
     cadence_mode: CadenceMode,
     onion_skin_enabled: bool,
     onion_skin_config: OnionSkinConfig,
+
+    // Phase 12: Generative Morphogenesis & Flow Field
+    rd_morphology: ReactionDiffusionMorphology,
+    rd_steps: usize,
+    flow_scale: f32,
+    flow_swirl: f32,
 }
 
 impl DitherCraftApp {
@@ -702,6 +709,11 @@ impl DitherCraftApp {
             cadence_mode: CadenceMode::default(),
             onion_skin_enabled: false,
             onion_skin_config: OnionSkinConfig::default(),
+
+            rd_morphology: ReactionDiffusionMorphology::default(),
+            rd_steps: 60,
+            flow_scale: 0.04,
+            flow_swirl: 1.5,
         }
     }
 
@@ -1147,6 +1159,10 @@ impl DitherCraftApp {
         let tonal_highlight_threshold = self.tonal_highlight_threshold;
         let tonal_feather = self.tonal_feather;
         let custom_matrix = self.custom_matrix.clone();
+        let rd_morphology = self.rd_morphology;
+        let rd_steps = self.rd_steps;
+        let flow_scale = self.flow_scale;
+        let flow_swirl = self.flow_swirl;
 
         self.is_rendering = true;
         let gen_id = self.render_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1173,6 +1189,10 @@ impl DitherCraftApp {
                 ))
             } else if algo_name.to_lowercase().contains("custom threshold matrix") || algo_name.to_lowercase() == "custom" {
                 Box::new(custom_matrix)
+            } else if algo_name.to_lowercase().contains("morphogenesis") || algo_name.to_lowercase().contains("reaction-diffusion") {
+                Box::new(ReactionDiffusionDither::new(ReactionDiffusionConfig { morphology: rd_morphology, steps: rd_steps, ..Default::default() }))
+            } else if algo_name.to_lowercase().contains("flow field") || algo_name.to_lowercase().contains("vector flow") {
+                Box::new(FlowFieldSteeredDither::new(FlowFieldConfig { scale: flow_scale, swirl: flow_swirl, angle_offset: 0.0 }))
             } else {
                 create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()))
             };
@@ -2542,6 +2562,22 @@ impl eframe::App for DitherCraftApp {
                     {
                         changed = true;
                     }
+                    if (query.is_empty() || "morphogenesis (reaction-diffusion)".contains(&query))
+                        && ui
+                            .selectable_value(
+                                &mut self.selected_algo,
+                                "Morphogenesis (Reaction-Diffusion)".into(),
+                                "Morphogenesis (Reaction-Diffusion)",
+                            )
+                            .clicked()
+                    {
+                        changed = true;
+                    }
+                    if (query.is_empty() || "vector flow field".contains(&query))
+                        && ui.selectable_value(&mut self.selected_algo, "Vector Flow Field".into(), "Vector Flow Field").clicked()
+                    {
+                        changed = true;
+                    }
                     for info in filtered {
                         if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
                             changed = true;
@@ -2676,6 +2712,58 @@ impl eframe::App for DitherCraftApp {
                             }
                         }
                     });
+                }
+
+                if self.selected_algo.to_lowercase().contains("morphogenesis") || self.selected_algo.to_lowercase().contains("reaction-diffusion") {
+                    ui.separator();
+                    ui.label("Reaction-Diffusion Morphogenesis:");
+                    ui.horizontal(|ui| {
+                        ui.label("Regime:");
+                        egui::ComboBox::from_id_salt("rd_morphology")
+                            .selected_text(match self.rd_morphology {
+                                ReactionDiffusionMorphology::Labyrinth => "Labyrinth",
+                                ReactionDiffusionMorphology::Spots => "Leopard Spots",
+                                ReactionDiffusionMorphology::Solitons => "Soliton Wavelets",
+                                ReactionDiffusionMorphology::PulsatingWaves => "Pulsating Waves",
+                                ReactionDiffusionMorphology::Fingerprints => "Fingerprint Ridges",
+                                ReactionDiffusionMorphology::Coral => "Branching Coral",
+                                _ => "Labyrinth",
+                            })
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Labyrinth, "Labyrinth").clicked() {
+                                    changed = true;
+                                }
+                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Spots, "Leopard Spots").clicked() {
+                                    changed = true;
+                                }
+                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Solitons, "Soliton Wavelets").clicked() {
+                                    changed = true;
+                                }
+                                if ui
+                                    .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::PulsatingWaves, "Pulsating Waves")
+                                    .clicked()
+                                {
+                                    changed = true;
+                                }
+                                if ui
+                                    .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Fingerprints, "Fingerprint Ridges")
+                                    .clicked()
+                                {
+                                    changed = true;
+                                }
+                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Coral, "Branching Coral").clicked() {
+                                    changed = true;
+                                }
+                            });
+                    });
+                    check_slider(ui, egui::Slider::new(&mut self.rd_steps, 10..=200).text("PDE Steps"), &mut changed, &mut preview_changed);
+                }
+
+                if self.selected_algo.to_lowercase().contains("flow field") || self.selected_algo.to_lowercase().contains("vector flow") {
+                    ui.separator();
+                    ui.label("Vector Flow Field Steered Controls:");
+                    check_slider(ui, egui::Slider::new(&mut self.flow_scale, 0.005..=0.20).text("Noise Scale"), &mut changed, &mut preview_changed);
+                    check_slider(ui, egui::Slider::new(&mut self.flow_swirl, 0.0..=5.0).text("Vortex Swirl"), &mut changed, &mut preview_changed);
                 }
             });
 

@@ -4,7 +4,8 @@ mod mcp;
 
 use clap::{Parser, Subcommand};
 use dither_core::{
-    AudioTrack, ColorHarmony, Cube3dLut, GCodeConfig, GCodeExporter, HatchStyle, ImageBuffer, Mp4Demuxer, SpotColorPlateSeparation, WebmDemuxer,
+    AudioTrack, ColorHarmony, Cube3dLut, FlowFieldConfig, FlowFieldSteeredDither, GCodeConfig, GCodeExporter, HatchStyle, ImageBuffer, Mp4Demuxer,
+    ReactionDiffusionConfig, ReactionDiffusionDither, ReactionDiffusionMorphology, ReactionDiffusionSimulator, SpotColorPlateSeparation, WebmDemuxer,
     algorithms::*, color::RgbColor, palette::Palette, renderers::*, temporal::TemporalNoisePattern, vector::BlackVectorIsolation,
 };
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
@@ -213,6 +214,36 @@ enum Commands {
         nib_width: f32,
         #[arg(long, default_value_t = false)]
         bi_directional: bool,
+    },
+    /// Synthesize biological reaction-diffusion patterns (Gray-Scott PDE) or dither an image with organic morphogenesis
+    Morphogenesis {
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value = "labyrinth")]
+        morphology: String,
+        #[arg(long, default_value_t = 80)]
+        steps: usize,
+        #[arg(short, long, default_value = "gameboy")]
+        palette: String,
+        #[arg(long, default_value_t = 256)]
+        width: u32,
+        #[arg(long, default_value_t = 256)]
+        height: u32,
+    },
+    /// Apply vector flow field steered error diffusion along continuous streamlines
+    FlowField {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 0.04)]
+        scale: f32,
+        #[arg(long, default_value_t = 1.5)]
+        swirl: f32,
+        #[arg(short, long, default_value = "gameboy")]
+        palette: String,
     },
     /// Run Model Context Protocol (MCP) JSON-RPC server over stdio
     Mcp,
@@ -754,6 +785,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 hatch_style,
                 arc_fitting,
                 input.display(),
+                output.display(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+
+        Commands::Morphogenesis { input, output, morphology, steps, palette, width, height } => {
+            let start = Instant::now();
+            let pal = select_palette(&palette);
+            let morph = match morphology.to_lowercase().as_str() {
+                "spots" => ReactionDiffusionMorphology::Spots,
+                "solitons" => ReactionDiffusionMorphology::Solitons,
+                "waves" => ReactionDiffusionMorphology::PulsatingWaves,
+                "fingerprints" => ReactionDiffusionMorphology::Fingerprints,
+                "coral" => ReactionDiffusionMorphology::Coral,
+                _ => ReactionDiffusionMorphology::Labyrinth,
+            };
+            let config = ReactionDiffusionConfig { morphology: morph, steps, ..Default::default() };
+
+            let out_buf = if let Some(in_path) = input {
+                let img = load_image(&in_path)?;
+                let dither = ReactionDiffusionDither::new(config);
+                dither.apply(&img, &pal)?
+            } else {
+                let mut sim = ReactionDiffusionSimulator::new(width as usize, height as usize, config);
+                sim.step(steps);
+                let raw_img = sim.to_image_buffer()?;
+                let algo = FloydSteinberg::default();
+                algo.apply(&raw_img, &pal)?
+            };
+
+            save_image(&output, &out_buf)?;
+            let elapsed = start.elapsed();
+            println!(
+                "Generated Reaction-Diffusion morphogenesis ({morphology}, {steps} steps) -> {} in {:.2}ms",
+                output.display(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+
+        Commands::FlowField { input, output, scale, swirl, palette } => {
+            let start = Instant::now();
+            let img = load_image(&input)?;
+            let pal = select_palette(&palette);
+            let config = FlowFieldConfig { scale, swirl, angle_offset: 0.0 };
+            let dither = FlowFieldSteeredDither::new(config);
+            let out_buf = dither.apply(&img, &pal)?;
+            save_image(&output, &out_buf)?;
+            let elapsed = start.elapsed();
+            println!(
+                "Applied Vector Flow Field steered dithering (scale: {scale}, swirl: {swirl}) -> {} in {:.2}ms",
                 output.display(),
                 elapsed.as_secs_f64() * 1000.0
             );

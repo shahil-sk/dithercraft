@@ -220,6 +220,8 @@ pub fn create_algorithm(name: &str) -> Option<Box<dyn DitherAlgorithm>> {
             Some(Box::new(TonalBandDither::new(85, 170, 16, Box::new(Bayer8x8), Box::new(FloydSteinberg::default()), Box::new(Atkinson::default()))))
         }
         "custommatrix" | "custom" => Some(Box::new(CustomMatrixDither::default())),
+        "morphogenesis" | "reactiondiffusion" => Some(Box::new(crate::generative::ReactionDiffusionDither::default())),
+        "vectorflowfield" | "flowfield" => Some(Box::new(crate::generative::FlowFieldSteeredDither::default())),
 
         _ => None,
     }

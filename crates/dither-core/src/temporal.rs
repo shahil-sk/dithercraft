@@ -178,12 +178,118 @@ impl TemporalNoisePattern {
     }
 }
 
-/// Interpolation mode between timeline keyframes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Interpolation and easing modes between timeline keyframes.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub enum Interpolation {
-    Step,
+    #[default]
     Linear,
+    Step,
     SmoothStep,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    Bounce,
+    Elastic,
+    CubicBezier(f32, f32, f32, f32),
+}
+
+impl Interpolation {
+    /// Evaluate normalized interpolation curve factor for $t \in [0, 1]$.
+    pub fn ease(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match *self {
+            Self::Step => {
+                if t >= 1.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Self::Linear => t,
+            Self::SmoothStep => t * t * (3.0 - 2.0 * t),
+            Self::EaseIn => t * t * t,
+            Self::EaseOut => 1.0 - (1.0 - t).powi(3),
+            Self::EaseInOut => {
+                if t < 0.5 {
+                    4.0 * t * t * t
+                } else {
+                    1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+                }
+            }
+            Self::Bounce => {
+                let n1 = 7.5625;
+                let d1 = 2.75;
+                if t < 1.0 / d1 {
+                    n1 * t * t
+                } else if t < 2.0 / d1 {
+                    let t = t - 1.5 / d1;
+                    n1 * t * t + 0.75
+                } else if t < 2.5 / d1 {
+                    let t = t - 2.25 / d1;
+                    n1 * t * t + 0.9375
+                } else {
+                    let t = t - 2.625 / d1;
+                    n1 * t * t + 0.984375
+                }
+            }
+            Self::Elastic => {
+                if t <= 0.0 {
+                    0.0
+                } else if t >= 1.0 {
+                    1.0
+                } else {
+                    let c4 = std::f32::consts::TAU / 3.0;
+                    -(2.0_f32.powf(10.0 * t - 10.0)) * ((t * 10.0 - 10.75) * c4).sin()
+                }
+            }
+            Self::CubicBezier(p1x, p1y, p2x, p2y) => Self::eval_bezier(p1x, p1y, p2x, p2y, t),
+        }
+    }
+
+    /// Cubic Bézier curve evaluation using numerical interval inversion.
+    pub fn eval_bezier(p1x: f32, p1y: f32, p2x: f32, p2y: f32, target_x: f32) -> f32 {
+        if target_x <= 0.0 {
+            return 0.0;
+        }
+        if target_x >= 1.0 {
+            return 1.0;
+        }
+
+        let sample_x = |u: f32| -> f32 {
+            let u2 = u * u;
+            let u3 = u2 * u;
+            let inv = 1.0 - u;
+            let inv2 = inv * inv;
+            3.0 * inv2 * u * p1x + 3.0 * inv * u2 * p2x + u3
+        };
+
+        let sample_y = |u: f32| -> f32 {
+            let u2 = u * u;
+            let u3 = u2 * u;
+            let inv = 1.0 - u;
+            let inv2 = inv * inv;
+            3.0 * inv2 * u * p1y + 3.0 * inv * u2 * p2y + u3
+        };
+
+        let mut low = 0.0_f32;
+        let mut high = 1.0_f32;
+        let mut u = target_x;
+
+        for _ in 0..12 {
+            let x = sample_x(u);
+            if (x - target_x).abs() < 1e-4 {
+                break;
+            }
+            if x < target_x {
+                low = u;
+            } else {
+                high = u;
+            }
+            u = 0.5 * (low + high);
+        }
+
+        sample_y(u)
+    }
 }
 
 /// A parameter keyframe at a specific animation frame index.
@@ -252,15 +358,8 @@ impl TimelineTrack {
         }
 
         let t = ((frame - k0.frame) as f32 / span).clamp(0.0, 1.0);
-
-        match self.interpolation {
-            Interpolation::Step => k0.value,
-            Interpolation::Linear => k0.value + t * (k1.value - k0.value),
-            Interpolation::SmoothStep => {
-                let ts = t * t * (3.0 - 2.0 * t);
-                k0.value + ts * (k1.value - k0.value)
-            }
-        }
+        let factor = self.interpolation.ease(t);
+        k0.value + factor * (k1.value - k0.value)
     }
 }
 
@@ -628,5 +727,29 @@ mod tests {
         let skinned = render_onion_skin(&frames, 1, &cfg).expect("onion skin");
         assert_eq!(skinned.width, 4);
         assert_eq!(skinned.height, 4);
+    }
+
+    #[test]
+    fn test_easing_curves_and_cubic_bezier() {
+        assert_eq!(Interpolation::Linear.ease(0.0), 0.0);
+        assert_eq!(Interpolation::Linear.ease(1.0), 1.0);
+        assert_eq!(Interpolation::Linear.ease(0.5), 0.5);
+
+        assert_eq!(Interpolation::Step.ease(0.4), 0.0);
+        assert_eq!(Interpolation::Step.ease(1.0), 1.0);
+
+        assert_eq!(Interpolation::EaseIn.ease(0.5), 0.125);
+        assert_eq!(Interpolation::EaseOut.ease(0.5), 0.875);
+
+        let bezier = Interpolation::CubicBezier(0.42, 0.0, 0.58, 1.0);
+        assert!((bezier.ease(0.5) - 0.5).abs() < 0.05);
+
+        let mut track = TimelineTrack::new("test", 0.0);
+        track.interpolation = Interpolation::EaseInOut;
+        track.add_keyframe(0, 0.0);
+        track.add_keyframe(10, 100.0);
+        assert_eq!(track.eval(0), 0.0);
+        assert_eq!(track.eval(10), 100.0);
+        assert_eq!(track.eval(5), 50.0);
     }
 }
