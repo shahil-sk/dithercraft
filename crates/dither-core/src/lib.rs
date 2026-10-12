@@ -16,6 +16,7 @@ pub mod color;
 pub mod color_depth;
 pub mod effects;
 pub mod error;
+pub mod lut;
 pub mod palette;
 pub mod renderers;
 pub mod shaders;
@@ -26,15 +27,16 @@ pub mod video;
 pub use algorithms::*;
 pub use audio::{AudioSpectrum, AudioTrack};
 pub use buffer::{HilbertCurve, ImageBuffer, ImageBufferPool};
-pub use color::{CvdMode, LabColor, OklabColor, RgbColor};
+pub use color::{ColorHarmony, CvdMode, LabColor, OklabColor, OklchColor, RgbColor};
 pub use color_depth::{LuminosityMapping, MismatchMode};
 pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen, VintageCrtSimulation};
 pub use error::DitherError;
+pub use lut::Cube3dLut;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykHalftone, PopTone};
 pub use temporal::{AnimatedFrame, AnimationSequence, Interpolation, Keyframe, LfoModulator, LfoWaveform, TemporalNoisePattern, TimelineTrack};
 pub use vector::{
-    BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, ToolpathStroke, export_smooth_bezier_svg,
-    fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
+    BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, SpotColorPlateSeparation, ToolpathStroke,
+    export_smooth_bezier_svg, fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
 };
 pub use video::{Mp4Demuxer, Mp4Sample, Mp4Track, VideoCodec, WebmDemuxer, WebmSample, WebmTrack, WebpAnimFrame, WebpAnimationMuxer};

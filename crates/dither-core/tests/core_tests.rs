@@ -535,3 +535,36 @@ fn test_gcode_toolpath_generation_and_optimization() {
     assert!(gcode.contains("G01 Z"));
     assert!(gcode.contains("M02 ; End of program"));
 }
+
+#[test]
+fn test_spot_color_plate_separation() {
+    use dither_core::vector::SpotColorPlateSeparation;
+
+    let mut buf = ImageBuffer::new(6, 6).expect("buf");
+    for x in 0..6 {
+        buf.set_pixel(x, 0, RgbColor::new(255, 0, 0));
+        buf.set_pixel(x, 1, RgbColor::new(255, 0, 0));
+        buf.set_pixel(x, 2, RgbColor::new(0, 255, 0));
+        buf.set_pixel(x, 3, RgbColor::new(0, 255, 0));
+        buf.set_pixel(x, 4, RgbColor::new(0, 0, 255));
+        buf.set_pixel(x, 5, RgbColor::new(0, 0, 255));
+    }
+
+    let pal = Palette::new("RGB_Trio", vec![RgbColor::new(255, 0, 0), RgbColor::new(0, 255, 0), RgbColor::new(0, 0, 255)]).expect("pal");
+
+    let sep = SpotColorPlateSeparation::default();
+    let plates = sep.generate_all_plates(&buf, &pal).expect("plates");
+
+    assert_eq!(plates.len(), 3);
+    assert_eq!(plates[0].0, "plate_01_FF0000.svg");
+    assert_eq!(plates[1].0, "plate_02_00FF00.svg");
+    assert_eq!(plates[2].0, "plate_03_0000FF.svg");
+
+    let plate1_svg = &plates[0].1;
+    assert!(plate1_svg.contains("<svg"));
+    assert!(plate1_svg.contains("</svg>"));
+    assert!(plate1_svg.contains("Registration Targets"));
+    assert!(plate1_svg.contains("Print Slug Header"));
+    assert!(plate1_svg.contains("Density Calibration Step Wedge"));
+    assert!(plate1_svg.contains(r##"fill="#000000""##));
+}

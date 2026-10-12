@@ -164,15 +164,15 @@ DitherCraft achieves complete parity across **6 mathematical categories**:
 | **Tile-Based Wavefront Error Diffusion** | Phase 7 | Wavefront parallel processing | Multi-core scaling for Floyd-Steinberg and Atkinson | Planned (`v1.0.0`) |
 | **Interactive Tone Curves & Levels** | Phase 8 | Pre-dither 256-LUT & Gamma transfer | Precision tonal pre-processing with live GUI sliders | **DELIVERED (`v0.9.6`)** |
 | **Reorderable Effect Node Stack** | Phase 8 | Layered compositor with blend modes | Full creative flexibility across post-effects | Planned (`v1.0.0`) |
-| **OKLCH Color Wheel & Harmonies** | Phase 8 | Classical color harmony mathematics | 1-click generation of retro bit-depth harmonies | Planned (`v1.0.0`) |
+| **OKLCH Color Wheel & Harmonies** | Phase 8 | Classical color harmony mathematics | 1-click generation of retro bit-depth harmonies | **DELIVERED (`v0.9.7`)** |
 | **Visual Preset Browser Gallery** | Phase 8 | Multi-thumbnail modal studio profile cards | Side-by-side aesthetic comparison & 1-click apply | **DELIVERED (`v0.9.6`)** |
 | **Canvas Rulers & Aspect Ratio Guides** | Phase 8 | Pixel alignment & retro display framing | Perfect retro composition (Game Boy, NES, CGA, CRT) | **DELIVERED (`v0.9.6`)** |
 | **CVD Color Blindness Simulation** | Phase 8 | Machado (2009) & Brettel (1997) models | Accessibility & high-contrast print legibility auditing | **DELIVERED (`v0.9.6`)** |
 | **Selective Alpha Masks & Brushes** | Phase 9 | Alpha compositing & luminance bands | Non-destructive region-selective dither application | Planned (`v1.1.0`) |
 | **Custom Threshold Matrix Designer** | Phase 9 | Dynamic $N \times N$ matrix compiler | In-app creation of custom ordered halftones and stamps | Planned (`v1.1.0`) |
-| **Pure-Rust 3D LUT Engine** | Phase 9 | Trilinear `.cube` interpolation | Authentic 1970s film and vintage CRT phosphor emulation | Planned (`v1.1.0`) |
+| **Pure-Rust 3D LUT Engine** | Phase 9 | Trilinear `.cube` interpolation | Authentic 1970s film and vintage CRT phosphor emulation | **DELIVERED (`v0.9.7`)** |
 | **CMYK Rosette Halftone Angle Screens** | Phase 10 | Traditional offset rosette screening | Moiré-free offset print separations with dot gain | Planned (`v1.1.0`) |
-| **Spot Color Plates & Registration Targets**| Phase 10 | Screen printing positive plate export | Separation films with corner bullseyes and wedges | Planned (`v1.1.0`) |
+| **Spot Color Plates & Registration Targets**| Phase 10 | Screen printing positive plate export | Separation films with corner bullseyes and wedges | **DELIVERED (`v0.9.7`)** |
 | **Plotter Arc Fitting (G02/G03) & Nib Offset**| Phase 10 | Circular curve fitting & stroke offsetting | 70% G-code reduction and ink bleed prevention | Planned (`v1.1.0`) |
 | **Geometric & Stippled Hatch Infill** | Phase 10 | Continuous vector boundary infills | Pen plotter shading and laser hatch toolpaths | Planned (`v1.1.0`) |
 | **Multi-Track Automation Timeline** | Phase 11 | Cubic Bézier parameter keyframing | Dynamic parameter animation for music videos | Planned (`v1.2.0`) |

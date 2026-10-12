@@ -1,13 +1,13 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use dither_core::{
-    AudioSpectrum, AudioTrack, ImageBuffer, Mp4Demuxer, WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
+    AudioSpectrum, AudioTrack, Cube3dLut, ImageBuffer, Mp4Demuxer, WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
     algorithms::*,
-    color::{CvdMode, RgbColor},
+    color::{ColorHarmony, CvdMode, RgbColor},
     effects::*,
     palette::{ColorMetric, Palette, Swatch},
     temporal::TemporalNoisePattern,
-    vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, export_smooth_bezier_svg},
+    vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, SpotColorPlateSeparation, export_smooth_bezier_svg},
 };
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
@@ -151,6 +151,9 @@ fn default_levels_white() -> u8 {
 fn default_levels_gamma() -> f32 {
     1.0
 }
+fn default_lut_preset() -> String {
+    "Technicolor 2-Strip".to_string()
+}
 
 /// Workstation snapshot capturing complete algorithm, palette, and effects configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -169,6 +172,11 @@ pub struct StudioPreset {
     pub levels_gamma: f32,
     #[serde(default)]
     pub cvd_mode: CvdMode,
+
+    #[serde(default)]
+    pub lut_enabled: bool,
+    #[serde(default = "default_lut_preset")]
+    pub lut_preset: String,
 
     pub glow_enabled: bool,
     pub glow_threshold: u8,
@@ -212,6 +220,8 @@ impl StudioPreset {
                 levels_white: 255,
                 levels_gamma: 1.0,
                 cvd_mode: CvdMode::Normal,
+                lut_enabled: false,
+                lut_preset: "Technicolor 2-Strip".into(),
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -244,6 +254,8 @@ impl StudioPreset {
                 levels_white: 255,
                 levels_gamma: 1.0,
                 cvd_mode: CvdMode::Normal,
+                lut_enabled: true,
+                lut_preset: "Cyber Matrix".into(),
                 glow_enabled: true,
                 glow_threshold: 160,
                 glow_radius: 6,
@@ -276,6 +288,8 @@ impl StudioPreset {
                 levels_white: 255,
                 levels_gamma: 1.0,
                 cvd_mode: CvdMode::Normal,
+                lut_enabled: true,
+                lut_preset: "Vintage Warm 1970".into(),
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -308,6 +322,8 @@ impl StudioPreset {
                 levels_white: 255,
                 levels_gamma: 1.0,
                 cvd_mode: CvdMode::Normal,
+                lut_enabled: false,
+                lut_preset: "Technicolor 2-Strip".into(),
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -340,6 +356,8 @@ impl StudioPreset {
                 levels_white: 255,
                 levels_gamma: 1.0,
                 cvd_mode: CvdMode::Normal,
+                lut_enabled: false,
+                lut_preset: "Technicolor 2-Strip".into(),
                 glow_enabled: false,
                 glow_threshold: 180,
                 glow_radius: 4,
@@ -496,6 +514,15 @@ pub struct DitherCraftApp {
     cvd_mode: CvdMode,
     aspect_guide: RetroAspectGuide,
     show_preset_gallery: bool,
+
+    // Phase 8-10 Studio Features: OKLCH Harmonies & 3D LUT
+    show_harmonies_dialog: bool,
+    harmony_base_rgb: [u8; 3],
+    harmony_mode: ColorHarmony,
+    harmony_count: usize,
+    lut_enabled: bool,
+    lut_preset_name: String,
+    custom_lut: Option<Cube3dLut>,
 }
 
 impl DitherCraftApp {
@@ -630,6 +657,14 @@ impl DitherCraftApp {
             cvd_mode: CvdMode::Normal,
             aspect_guide: RetroAspectGuide::None,
             show_preset_gallery: false,
+
+            show_harmonies_dialog: false,
+            harmony_base_rgb: [255, 90, 30],
+            harmony_mode: ColorHarmony::Triadic,
+            harmony_count: 6,
+            lut_enabled: false,
+            lut_preset_name: "Technicolor 2-Strip".into(),
+            custom_lut: None,
         }
     }
 
@@ -851,6 +886,9 @@ impl DitherCraftApp {
             temporal_enabled: self.temporal_noise_enabled,
             temporal_pattern: self.temporal_pattern,
             temporal_intensity: self.temporal_intensity,
+
+            lut_enabled: self.lut_enabled,
+            lut_preset: self.lut_preset_name.clone(),
         }
     }
 
@@ -905,6 +943,10 @@ impl DitherCraftApp {
         self.levels_white = preset.levels_white;
         self.levels_gamma = preset.levels_gamma;
         self.cvd_mode = preset.cvd_mode;
+
+        self.lut_enabled = preset.lut_enabled;
+        self.lut_preset_name = preset.lut_preset.clone();
+        self.custom_lut = None;
 
         self.trigger_render();
     }
@@ -1018,6 +1060,22 @@ impl DitherCraftApp {
         let temporal_opt =
             if self.temporal_noise_enabled { Some((self.temporal_pattern, self.frame_counter, self.temporal_intensity)) } else { None };
 
+        let lut_opt = if self.lut_enabled {
+            if let Some(ref custom) = self.custom_lut {
+                Some(custom.clone())
+            } else {
+                Some(match self.lut_preset_name.as_str() {
+                    "Vintage Warm 1970" => Cube3dLut::vintage_warm_1970(32),
+                    "Amber Phosphor" => Cube3dLut::amber_phosphor(32),
+                    "Cyber Matrix" => Cube3dLut::cyber_matrix(32),
+                    "Bleach Bypass" => Cube3dLut::bleach_bypass(32),
+                    _ => Cube3dLut::technicolor_2strip(32),
+                })
+            }
+        } else {
+            None
+        };
+
         let levels_black = self.levels_black;
         let levels_white = self.levels_white;
         let levels_gamma = self.levels_gamma;
@@ -1038,6 +1096,9 @@ impl DitherCraftApp {
             let algo: Box<dyn DitherAlgorithm> = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
 
             let mut input_buf = (*source).clone();
+            if let Some(ref lut) = lut_opt {
+                lut.apply_buffer(&mut input_buf);
+            }
             if levels_black > 0 || levels_white < 255 || (levels_gamma - 1.0).abs() > 0.001 {
                 input_buf.adjust_levels(levels_black, levels_white, levels_gamma);
             }
@@ -1765,6 +1826,20 @@ impl eframe::App for DitherCraftApp {
                         ui.close_menu();
                     }
 
+                    if ui.button("Export Silkscreen Print Plates (.svg)...").clicked() {
+                        let pick_target = self.rendered_image.as_ref().and_then(|img| rfd::FileDialog::new().pick_folder().map(|dir| (img, dir)));
+                        if let Some((img, dir)) = pick_target {
+                            let sep = SpotColorPlateSeparation::default();
+                            if let Ok(plates) = sep.generate_all_plates(img, &self.active_palette) {
+                                for (filename, content) in &plates {
+                                    let _ = std::fs::write(dir.join(filename), content);
+                                }
+                                self.status_text = format!("Exported {} spot color plates to {}", plates.len(), dir.display());
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
                     ui.separator();
 
                     if ui.button("Batch Processing Studio...").clicked() {
@@ -1821,6 +1896,11 @@ impl eframe::App for DitherCraftApp {
                             self.active_palette = pal;
                             self.trigger_render();
                         }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Perceptual Color Harmonies (OKLCH)...").clicked() {
+                        self.show_harmonies_dialog = true;
                         ui.close_menu();
                     }
                 });
@@ -2087,6 +2167,102 @@ impl eframe::App for DitherCraftApp {
                 is_open = false;
             }
             self.show_preset_gallery = is_open;
+        }
+
+        // OKLCH Perceptual Color Harmonies Modal Dialog
+        if self.show_harmonies_dialog {
+            let mut is_open = true;
+            let mut close_requested = false;
+            let mut apply_requested = false;
+            egui::Window::new("OKLCH Perceptual Color Harmonies").resizable(false).default_width(440.0).open(&mut is_open).show(ctx, |ui| {
+                ui.heading("Generate Balanced Retro Palette");
+                ui.label("Synthesizes harmonic swatches across perceptual polar OKLCH color space.");
+                ui.add_space(8.0);
+
+                // Base color picker
+                ui.horizontal(|ui| {
+                    ui.label("Base Key Color:");
+                    let rgb = self.harmony_base_rgb;
+                    let mut color32 = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    if ui.color_edit_button_srgba(&mut color32).changed() {
+                        self.harmony_base_rgb = [color32.r(), color32.g(), color32.b()];
+                    }
+                    ui.monospace(format!("#{:02X}{:02X}{:02X}", self.harmony_base_rgb[0], self.harmony_base_rgb[1], self.harmony_base_rgb[2]));
+                });
+
+                // Harmony mode selection
+                ui.horizontal(|ui| {
+                    ui.label("Harmony Scheme:");
+                    egui::ComboBox::from_id_salt("harmony_mode_picker").selected_text(self.harmony_mode.name()).show_ui(ui, |ui| {
+                        for h in [
+                            ColorHarmony::Complementary,
+                            ColorHarmony::Triadic,
+                            ColorHarmony::Tetradic,
+                            ColorHarmony::Analogous,
+                            ColorHarmony::SplitComplementary,
+                            ColorHarmony::Monochromatic,
+                        ] {
+                            ui.selectable_value(&mut self.harmony_mode, h, h.name());
+                        }
+                    });
+                });
+
+                // Swatch count
+                ui.add(egui::Slider::new(&mut self.harmony_count, 2..=16).text("Color Count"));
+
+                ui.add_space(8.0);
+                ui.label("Generated Swatches:");
+
+                // Generate preview palette
+                let base_color = RgbColor::new(self.harmony_base_rgb[0], self.harmony_base_rgb[1], self.harmony_base_rgb[2]);
+                let preview_palette = Palette::from_harmony(base_color, self.harmony_mode, self.harmony_count);
+
+                ui.horizontal(|ui| {
+                    for swatch in &preview_palette.swatches {
+                        let c = swatch.color;
+                        let c32 = Color32::from_rgb(c.r, c.g, c.b);
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 3.0, c32);
+                    }
+                });
+
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply as Active Palette").clicked() {
+                        apply_requested = true;
+                    }
+                    if ui.button("Export Palette...").clicked() {
+                        let fname = format!("harmony_{}.gpl", self.harmony_mode.name().to_lowercase().replace(' ', "-"));
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(&fname)
+                            .add_filter("GIMP Palette (.gpl)", &["gpl"])
+                            .add_filter("JSON Palette (.json)", &["json"])
+                            .add_filter("Hex Palette (.hex)", &["hex"])
+                            .save_file()
+                            && preview_palette.export_to_file(&path).is_ok()
+                        {
+                            self.status_text = format!("Exported harmony palette to {}", path.display());
+                        }
+                    }
+                    if ui.button("Close").clicked() {
+                        close_requested = true;
+                    }
+                });
+
+                if apply_requested {
+                    self.record_undo_state();
+                    self.active_palette = preview_palette;
+                    self.selected_palette_name = format!("Harmony - {}", self.harmony_mode.name());
+                    self.status_text = format!("Generated OKLCH {} harmony palette ({} colors)", self.harmony_mode.name(), self.harmony_count);
+                    self.trigger_render();
+                    close_requested = true;
+                }
+            });
+
+            if close_requested {
+                is_open = false;
+            }
+            self.show_harmonies_dialog = is_open;
         }
 
         // Telemetry HUD Window
@@ -2387,6 +2563,9 @@ impl eframe::App for DitherCraftApp {
                         self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
                         changed = true;
                     }
+                    if ui.button("🎨 Harmonies...").on_hover_text("Generate balanced OKLCH perceptual harmonies").clicked() {
+                        self.show_harmonies_dialog = true;
+                    }
                     if ui.button("💾 Export...").clicked() {
                         let fname = format!("{}.gpl", self.active_palette.name.to_lowercase().replace(' ', "-"));
                         if let Some(path) = rfd::FileDialog::new()
@@ -2495,6 +2674,39 @@ impl eframe::App for DitherCraftApp {
                 }
                 if self.sharpen_enabled {
                     check_slider(ui, egui::Slider::new(&mut self.sharpen_amount, 0.1..=3.0).text("Amount"), &mut changed, &mut preview_changed);
+                }
+
+                if ui.checkbox(&mut self.lut_enabled, "3D LUT Film & Phosphor Grading").changed() {
+                    changed = true;
+                }
+                if self.lut_enabled {
+                    egui::ComboBox::from_id_salt("lut_preset_picker")
+                        .selected_text(if self.custom_lut.is_some() { "Custom .cube LUT" } else { &self.lut_preset_name })
+                        .show_ui(ui, |ui| {
+                            for name in ["Technicolor 2-Strip", "Vintage Warm 1970", "Amber Phosphor", "Cyber Matrix", "Bleach Bypass"] {
+                                if ui.selectable_label(self.custom_lut.is_none() && self.lut_preset_name == name, name).clicked() {
+                                    self.lut_preset_name = name.to_string();
+                                    self.custom_lut = None;
+                                    changed = true;
+                                }
+                            }
+                        });
+                    ui.horizontal(|ui| {
+                        if ui.button("Load .cube LUT...").clicked()
+                            && let Some(path) = rfd::FileDialog::new().add_filter("3D LUT (.cube)", &["cube"]).pick_file()
+                            && let Ok(content) = std::fs::read_to_string(&path)
+                            && let Ok(lut) = Cube3dLut::from_cube_str(&content)
+                        {
+                            self.status_text = format!("Loaded 3D LUT '{}' (size {}^3)", lut.title, lut.size);
+                            self.custom_lut = Some(lut);
+                            self.lut_enabled = true;
+                            changed = true;
+                        }
+                        if self.custom_lut.is_some() && ui.button("Clear Custom").clicked() {
+                            self.custom_lut = None;
+                            changed = true;
+                        }
+                    });
                 }
             });
 

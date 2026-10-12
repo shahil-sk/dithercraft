@@ -141,6 +141,11 @@ impl RgbColor {
         self.to_oklab().delta_e_sq(&other.to_oklab())
     }
 
+    /// Convert sRGB to polar OKLCH color representation.
+    pub fn to_oklch(&self) -> OklchColor {
+        self.to_oklab().to_oklch()
+    }
+
     /// CIEDE2000 (ΔE00) perceptual color difference.
     #[inline]
     pub fn distance_ciede2000(&self, other: &Self) -> f32 {
@@ -278,6 +283,102 @@ impl OklabColor {
     pub fn delta_e(&self, other: &Self) -> f32 {
         self.delta_e_sq(other).sqrt()
     }
+
+    /// Convert OKLab to gamma-compressed sRGB 8-bit color.
+    #[allow(clippy::excessive_precision)]
+    pub fn to_rgb(&self) -> RgbColor {
+        let l_ = self.l + 0.3963377774 * self.a + 0.2158037573 * self.b;
+        let m_ = self.l - 0.1055613458 * self.a - 0.0638541728 * self.b;
+        let s_ = self.l - 0.0894841775 * self.a - 1.2914855480 * self.b;
+
+        let l = l_ * l_ * l_;
+        let m = m_ * m_ * m_;
+        let s = s_ * s_ * s_;
+
+        let r_lin = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+        let g_lin = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+        let b_lin = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+
+        RgbColor::from_linear_f32(r_lin, g_lin, b_lin)
+    }
+
+    /// Convert OKLab to polar OKLCH color representation.
+    pub fn to_oklch(&self) -> OklchColor {
+        let c = (self.a * self.a + self.b * self.b).sqrt();
+        let mut h = self.b.atan2(self.a).to_degrees();
+        if h < 0.0 {
+            h += 360.0;
+        }
+        OklchColor { l: self.l, c, h }
+    }
+}
+
+/// Polar cylindrical representation of OKLab (Lightness L [0, 1], Chroma C [0, ~0.4], Hue h in degrees [0, 360)).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct OklchColor {
+    pub l: f32,
+    pub c: f32,
+    pub h: f32,
+}
+
+impl OklchColor {
+    pub fn new(l: f32, c: f32, h: f32) -> Self {
+        let mut norm_h = h % 360.0;
+        if norm_h < 0.0 {
+            norm_h += 360.0;
+        }
+        Self { l: l.clamp(0.0, 1.0), c: c.max(0.0), h: norm_h }
+    }
+
+    /// Convert OKLCH to Cartesian OKLab color.
+    pub fn to_oklab(&self) -> OklabColor {
+        let h_rad = self.h.to_radians();
+        OklabColor { l: self.l, a: self.c * h_rad.cos(), b: self.c * h_rad.sin() }
+    }
+
+    /// Convert OKLCH to gamma-compressed sRGB 8-bit color.
+    pub fn to_rgb(&self) -> RgbColor {
+        self.to_oklab().to_rgb()
+    }
+}
+
+/// Classical color harmony rules evaluated in perceptually uniform OKLCH space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ColorHarmony {
+    #[default]
+    Complementary,
+    Triadic,
+    Tetradic,
+    Analogous,
+    SplitComplementary,
+    Monochromatic,
+}
+
+impl ColorHarmony {
+    pub const ALL: [Self; 6] = [Self::Complementary, Self::Triadic, Self::Tetradic, Self::Analogous, Self::SplitComplementary, Self::Monochromatic];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Complementary => "Complementary (180°)",
+            Self::Triadic => "Triadic (120°)",
+            Self::Tetradic => "Tetradic Square (90°)",
+            Self::Analogous => "Analogous (±30°)",
+            Self::SplitComplementary => "Split-Complementary (150°/210°)",
+            Self::Monochromatic => "Monochromatic (Lightness Scale)",
+        }
+    }
+
+    /// Generate an array of target hue offsets (in degrees) for this harmony.
+    pub fn hue_offsets(&self) -> &'static [f32] {
+        match self {
+            Self::Complementary => &[0.0, 180.0],
+            Self::Triadic => &[0.0, 120.0, 240.0],
+            Self::Tetradic => &[0.0, 90.0, 180.0, 270.0],
+            Self::Analogous => &[0.0, -30.0, 30.0],
+            Self::SplitComplementary => &[0.0, 150.0, 210.0],
+            Self::Monochromatic => &[0.0],
+        }
+    }
 }
 
 /// Color Vision Deficiency (CVD) simulation modes based on physiologically grounded
@@ -355,5 +456,35 @@ mod tests {
         // Achromatopsia must have equal R, G, B channels
         assert_eq!(achro.r, achro.g);
         assert_eq!(achro.g, achro.b);
+    }
+
+    #[test]
+    fn test_oklch_roundtrip() {
+        let test_colors = [
+            RgbColor::new(255, 0, 0),
+            RgbColor::new(0, 255, 0),
+            RgbColor::new(0, 0, 255),
+            RgbColor::new(255, 255, 0),
+            RgbColor::new(128, 64, 192),
+            RgbColor::new(255, 255, 255),
+            RgbColor::new(0, 0, 0),
+        ];
+
+        for &c in &test_colors {
+            let oklch = c.to_oklch();
+            let roundtrip = oklch.to_rgb();
+            assert!((c.r as i32 - roundtrip.r as i32).abs() <= 2);
+            assert!((c.g as i32 - roundtrip.g as i32).abs() <= 2);
+            assert!((c.b as i32 - roundtrip.b as i32).abs() <= 2);
+        }
+    }
+
+    #[test]
+    fn test_color_harmonies() {
+        for harmony in ColorHarmony::ALL {
+            assert!(!harmony.name().is_empty());
+            assert!(!harmony.hue_offsets().is_empty());
+            assert_eq!(harmony.hue_offsets()[0], 0.0);
+        }
     }
 }

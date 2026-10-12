@@ -1,5 +1,5 @@
 use crate::buffer::ImageBuffer;
-use crate::color::RgbColor;
+use crate::color::{ColorHarmony, OklchColor, RgbColor};
 use crate::error::DitherError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -58,6 +58,32 @@ impl Palette {
 
     pub fn colors(&self) -> Vec<RgbColor> {
         self.swatches.iter().map(|s| s.color).collect()
+    }
+
+    /// Generate a harmonious palette from a base color using OKLCH color wheel rules.
+    pub fn from_harmony(base: RgbColor, harmony: ColorHarmony, count: usize) -> Self {
+        let count = count.clamp(2, 64);
+        let base_oklch = base.to_oklch();
+        let offsets = harmony.hue_offsets();
+
+        let mut swatches = Vec::with_capacity(count);
+        let num_hues = offsets.len();
+        let shades_per_hue = count.div_ceil(num_hues);
+
+        for &offset in offsets {
+            let hue = (base_oklch.h + offset).rem_euclid(360.0);
+            for s in 0..shades_per_hue {
+                if swatches.len() >= count {
+                    break;
+                }
+                let l_factor = if shades_per_hue > 1 { 0.20 + 0.65 * (s as f32 / (shades_per_hue - 1) as f32) } else { base_oklch.l };
+                let c_factor = (base_oklch.c * (0.6 + 0.4 * (1.0 - (l_factor - 0.5).abs() * 2.0))).clamp(0.02, 0.25);
+                let col = OklchColor::new(l_factor, c_factor, hue).to_rgb();
+                swatches.push(Swatch::new(col, false));
+            }
+        }
+
+        Self { name: format!("{} ({})", harmony.name(), base.to_hex()), swatches, metric: ColorMetric::Oklab }
     }
 
     /// Set locked state for a swatch slot.

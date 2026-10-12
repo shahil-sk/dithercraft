@@ -217,10 +217,11 @@ Focus: Modernize the desktop workstation into an intuitive, visually polished, s
   - Toggled with single keypress (`L`), top View menu, and floating Viewport HUD.
 
 ### 8.4 Color Harmony Generator & Interactive OKLCH Color Wheel
-- [ ] **Intelligent Palette Harmonizer**:
-  - Interactive circular OKLCH / HSV color wheel in the Palette Drawer.
-  - One-click harmony generation based on classical color theory: Complementary, Triadic, Analogous, Split-Complementary, and Tetradic harmonies.
+- [x] **Intelligent Palette Harmonizer**:
+  - Interactive circular OKLCH / HSV color wheel and dedicated modal dialog in the Palette Drawer.
+  - One-click harmony generation based on classical color theory: Complementary, Triadic, Analogous, Split-Complementary, Tetradic, and Monochromatic harmonies.
   - Dynamic palette quantization remapping source harmonies into retro bit-depth constraints (1-bit, 2-bit, 4-bit, 8-bit).
+  - Headless CLI integration via `generate-harmony` subcommand exporting `.gpl`, `.json`, and `.hex`.
 
 ### 8.5 Instant A/B Preset Snapshot Comparator
 - [x] **Quick Snapshot Slots (Slots A/B/C/D)**:
@@ -279,9 +280,11 @@ Focus: Expand creative versatility for artists, printmakers, and multimedia desi
   - Export and import custom matrices as JSON or PNG bitmap patterns (e.g., custom typography stamps, logos, geometric crosshatching).
 
 ### 9.3 3D LUT (Look-Up Table) Vintage Film Emulation
-- [ ] **Pure-Rust 3D LUT Engine**:
-  - Zero-dependency parser and trilinear interpolator for standard `.cube` (17×17×17 and 33×33×33) 3D Color Look-Up Tables.
-  - Bundled vintage film profiles: 1970s Instant Film, Early Technicolor, Kodachrome 64, and Vintage Arcade Monitor phosphors.
+- [x] **Pure-Rust 3D LUT Engine**:
+  - Zero-dependency parser and trilinear interpolator for standard `.cube` 3D Color Look-Up Tables with parallel Rayon processing.
+  - Bundled vintage film profiles: Early Technicolor 2-Strip, 1970s Vintage Warm, Amber Phosphor, Cyber Matrix, and Bleach Bypass.
+  - Dynamic integration in GUI Effects stack with custom `.cube` file loader and preset persistence.
+  - CLI subcommand `apply-lut` for batch grading image pipelines.
 
 ### 9.4 Production Batch Automation & Export Queue
 - [ ] **Batch Production Studio Upgrades**:
@@ -302,10 +305,12 @@ Focus: Expand DitherCraft into the industry-standard vector and separation engin
   - Yule-Nielsen spectral dot gain compensation curve simulating physical ink spread on porous un-coated paper stocks.
 
 ### 10.2 Physical Spot Color Separations & Registration Target Generator
-- [ ] **Multi-Screen Print Preparation**:
-  - Channel separation exporting individual monochrome printable films / positive plates per palette swatch or custom spot ink.
-  - Automated inclusion of printer registration marks (corner crosshairs `+`, center bullseyes, and fold lines).
+- [x] **Multi-Screen Print Preparation**:
+  - Channel separation exporting individual 100% black printable films / positive plates per palette swatch or custom spot ink.
+  - Automated inclusion of printer registration marks (4 corner crosshairs `+` and circle targets).
   - Density step-wedge calibration strips along plate margins for exposure and squeegee pressure verification.
+  - Print slug annotation headers detailing plate index, total plates, swatch hex code, and generator provenance.
+  - GUI File menu integration: "Export Silkscreen Print Plates (.svg)..." and CLI subcommand `export-plates`.
 
 ### 10.3 Pen Plotter Arc Fitting (G02/G03) & Bi-Directional Nib Width Offsetting
 - [ ] **Physical Plotter Toolpath Refinement**:

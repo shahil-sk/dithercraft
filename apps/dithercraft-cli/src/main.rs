@@ -4,8 +4,8 @@ mod mcp;
 
 use clap::{Parser, Subcommand};
 use dither_core::{
-    AudioTrack, ImageBuffer, Mp4Demuxer, WebmDemuxer, algorithms::*, color::RgbColor, palette::Palette, renderers::*, temporal::TemporalNoisePattern,
-    vector::BlackVectorIsolation,
+    AudioTrack, ColorHarmony, Cube3dLut, ImageBuffer, Mp4Demuxer, SpotColorPlateSeparation, WebmDemuxer, algorithms::*, color::RgbColor,
+    palette::Palette, renderers::*, temporal::TemporalNoisePattern, vector::BlackVectorIsolation,
 };
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::{AnimationDecoder, Frame, ImageReader, RgbaImage};
@@ -107,6 +107,7 @@ enum Commands {
         pattern: String,
     },
     /// Extract a quantized palette from an image and export to .gpl, .hex, .pal, .act, or .json
+    /// Extract a quantized palette from an image and export to .gpl, .hex, .pal, .act, or .json
     ExtractPalette {
         #[arg(short, long)]
         input: PathBuf,
@@ -116,6 +117,41 @@ enum Commands {
         colors: usize,
         #[arg(long, default_value = "median-cut")]
         method: String,
+    },
+    /// Generate an OKLCH perceptual color harmony palette and export to .hex, .gpl, or .json
+    GenerateHarmony {
+        #[arg(short, long, default_value = "#ff4500")]
+        base: String,
+        #[arg(long, default_value = "triadic")]
+        harmony: String,
+        #[arg(short, long, default_value_t = 6)]
+        count: usize,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Apply a 3D LUT (.cube file or built-in retro profile) to an image
+    ApplyLut {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        cube: Option<PathBuf>,
+        #[arg(long, default_value = "technicolor")]
+        preset: String,
+    },
+    /// Export silkscreen or lithographic film positive spot color plates (.svg)
+    ExportPlates {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(short, long, default_value = "gameboy")]
+        palette: String,
+        #[arg(long, default_value_t = 1.0)]
+        pixel_size: f32,
+        #[arg(long, default_value_t = 30.0)]
+        margin: f32,
     },
     /// Run Model Context Protocol (MCP) JSON-RPC server over stdio
     Mcp,
@@ -503,6 +539,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output.display(),
                 elapsed.as_secs_f64() * 1000.0
             );
+        }
+
+        Commands::GenerateHarmony { base, harmony, count, output } => {
+            let start = Instant::now();
+            let base_rgb = RgbColor::from_hex(&base).ok_or("invalid hex color string")?;
+            let harm = match harmony.to_lowercase().as_str() {
+                "complementary" | "comp" => ColorHarmony::Complementary,
+                "analogous" => ColorHarmony::Analogous,
+                "split" | "split-complementary" | "splitcomplementary" => ColorHarmony::SplitComplementary,
+                "tetradic" | "square" => ColorHarmony::Tetradic,
+                "monochromatic" | "mono" => ColorHarmony::Monochromatic,
+                _ => ColorHarmony::Triadic,
+            };
+            let pal = Palette::from_harmony(base_rgb, harm, count);
+            pal.export_to_file(&output)?;
+            let elapsed = start.elapsed();
+            println!(
+                "Generated {} color palette using {} harmony around {} -> {} in {:.2}ms",
+                pal.len(),
+                harm.name(),
+                base,
+                output.display(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+
+        Commands::ApplyLut { input, output, cube, preset } => {
+            let start = Instant::now();
+            let mut img = load_image(&input)?;
+            let lut = if let Some(cube_path) = cube {
+                let content = std::fs::read_to_string(&cube_path)?;
+                Cube3dLut::from_cube_str(&content)?
+            } else {
+                match preset.to_lowercase().replace(['-', '_'], "").as_str() {
+                    "vintage" | "vintagewarm" | "1970" => Cube3dLut::vintage_warm_1970(32),
+                    "amber" | "amberphosphor" => Cube3dLut::amber_phosphor(32),
+                    "cyber" | "cybermatrix" | "matrix" => Cube3dLut::cyber_matrix(32),
+                    "bleach" | "bleachbypass" => Cube3dLut::bleach_bypass(32),
+                    _ => Cube3dLut::technicolor_2strip(32),
+                }
+            };
+            println!("Applying 3D LUT '{}' (size {}^3)...", lut.title, lut.size);
+            lut.apply_buffer(&mut img);
+            save_image(&output, &img)?;
+            let elapsed = start.elapsed();
+            println!("Processed {} -> {} in {:.2}ms", input.display(), output.display(), elapsed.as_secs_f64() * 1000.0);
+        }
+
+        Commands::ExportPlates { input, output_dir, palette, pixel_size, margin } => {
+            let start = Instant::now();
+            let img = load_image(&input)?;
+            let pal = select_palette(&palette);
+            let sep = SpotColorPlateSeparation {
+                pixel_size,
+                margin,
+                include_registration_marks: true,
+                include_calibration_wedge: true,
+                include_slug: true,
+            };
+            std::fs::create_dir_all(&output_dir)?;
+            let plates = sep.generate_all_plates(&img, &pal)?;
+            for (filename, svg_data) in &plates {
+                let out_file = output_dir.join(filename);
+                std::fs::write(&out_file, svg_data)?;
+            }
+            let elapsed = start.elapsed();
+            println!("Exported {} spot color plates to {} in {:.2}ms", plates.len(), output_dir.display(), elapsed.as_secs_f64() * 1000.0);
         }
 
         Commands::Mcp => {
