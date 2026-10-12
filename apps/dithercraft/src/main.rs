@@ -405,6 +405,11 @@ pub struct DitherCraftApp {
     // File tracking
     source_path: Option<PathBuf>,
     recent_files: Vec<PathBuf>,
+
+    // Phase 8 Workstation Features
+    snapshots: [Option<StudioPreset>; 4],
+    show_loupe: bool,
+    show_shortcuts_dialog: bool,
 }
 
 impl DitherCraftApp {
@@ -529,6 +534,10 @@ impl DitherCraftApp {
 
             source_path: None,
             recent_files: Vec::new(),
+
+            snapshots: [None, None, None, None],
+            show_loupe: false,
+            show_shortcuts_dialog: false,
         }
     }
 
@@ -1106,6 +1115,35 @@ impl eframe::App for DitherCraftApp {
             }
         } else if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Y)) {
             self.redo();
+        }
+
+        // Handle Instant A/B Preset Snapshots (F5-F8 recall, Shift+F5-F8 save)
+        for (idx, key) in [(0, egui::Key::F5), (1, egui::Key::F6), (2, egui::Key::F7), (3, egui::Key::F8)] {
+            if ctx.input(|i| i.key_pressed(key)) {
+                let slot_char = ['A', 'B', 'C', 'D'][idx];
+                if ctx.input(|i| i.modifiers.shift) {
+                    let snap = self.capture_preset(format!("Snapshot {slot_char}"));
+                    self.status_text = format!("Stored Snapshot {slot_char}: {} ({})", snap.algo, snap.palette_name);
+                    self.snapshots[idx] = Some(snap);
+                } else if let Some(snap) = self.snapshots[idx].clone() {
+                    self.record_undo_state();
+                    self.apply_preset(&snap);
+                    self.status_text = format!("Recalled Snapshot {slot_char}: {} ({})", snap.algo, snap.palette_name);
+                    self.trigger_render();
+                } else {
+                    self.status_text = format!("Snapshot {slot_char} is empty. Use Shift+F{} or right-click button to store.", idx + 5);
+                }
+            }
+        }
+
+        // Toggle Precision Magnifier Loupe (L)
+        if ctx.input(|i| !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.alt && i.key_pressed(egui::Key::L)) {
+            self.show_loupe = !self.show_loupe;
+        }
+
+        // Toggle Keyboard Shortcuts Cheatsheet (F1 or ?)
+        if ctx.input(|i| i.key_pressed(egui::Key::F1) || (i.modifiers.shift && i.key_pressed(egui::Key::Slash))) {
+            self.show_shortcuts_dialog = !self.show_shortcuts_dialog;
         }
 
         // Handle Drag & Drop
@@ -1715,6 +1753,31 @@ impl eframe::App for DitherCraftApp {
                         }
                         ui.close_menu();
                     }
+                    ui.separator();
+                    ui.label("Instant A/B Snapshots (F5-F8):");
+                    for (idx, label) in ['A', 'B', 'C', 'D'].iter().enumerate() {
+                        let is_stored = self.snapshots[idx].is_some();
+                        let title = if let Some(ref s) = self.snapshots[idx] {
+                            format!("Recall Snapshot {label} (F{}) — {} ({})", idx + 5, s.algo, s.palette_name)
+                        } else {
+                            format!("Snapshot {label} [Empty] — Store Current (Shift+F{})", idx + 5)
+                        };
+                        if ui.button(title).clicked() {
+                            if is_stored {
+                                if let Some(snap) = self.snapshots[idx].clone() {
+                                    self.record_undo_state();
+                                    self.apply_preset(&snap);
+                                    self.status_text = format!("Recalled Snapshot {label}: {} ({})", snap.algo, snap.palette_name);
+                                    self.trigger_render();
+                                }
+                            } else {
+                                let snap = self.capture_preset(format!("Snapshot {label}"));
+                                self.status_text = format!("Stored Snapshot {label}: {} ({})", snap.algo, snap.palette_name);
+                                self.snapshots[idx] = Some(snap);
+                            }
+                            ui.close_menu();
+                        }
+                    }
                 });
 
                 ui.menu_button("Theme", |ui| {
@@ -1734,12 +1797,17 @@ impl eframe::App for DitherCraftApp {
 
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut self.show_telemetry_hud, "Pipeline Telemetry HUD");
+                    ui.checkbox(&mut self.show_loupe, "Pixel Magnifier Loupe (L)");
                     ui.checkbox(&mut self.show_pixel_grid, "Pixel Grid (>=800%)");
                     ui.checkbox(&mut self.split_view_enabled, "Split-View Comparison");
                     ui.checkbox(&mut self.debounce_mode, "Debounce Slider Preview");
                 });
 
                 ui.menu_button("Help", |ui| {
+                    if ui.button("Keyboard Shortcuts Cheatsheet (F1 / ?)...").clicked() {
+                        self.show_shortcuts_dialog = true;
+                        ui.close_menu();
+                    }
                     if ui.button("About DitherCraft...").clicked() {
                         self.show_about = true;
                         ui.close_menu();
@@ -1764,6 +1832,69 @@ impl eframe::App for DitherCraftApp {
                     ui.label("Dual-licensed under MIT / Apache-2.0.");
                 });
             });
+        }
+
+        // Keyboard Shortcuts Cheatsheet Modal
+        if self.show_shortcuts_dialog {
+            let mut is_open = true;
+            let mut close_requested = false;
+            egui::Window::new("Keyboard Shortcuts Cheatsheet").collapsible(false).resizable(false).open(&mut is_open).show(ctx, |ui| {
+                ui.heading("DitherCraft Studio Shortcuts");
+                ui.add_space(6.0);
+                egui::Grid::new("shortcuts_grid").striped(true).spacing([28.0, 6.0]).show(ui, |ui| {
+                    ui.strong("Action");
+                    ui.strong("Shortcut");
+                    ui.end_row();
+
+                    ui.label("Undo");
+                    ui.monospace("Ctrl+Z");
+                    ui.end_row();
+
+                    ui.label("Redo");
+                    ui.monospace("Ctrl+Shift+Z / Ctrl+Y");
+                    ui.end_row();
+
+                    ui.label("Toggle Precision Magnifier Loupe");
+                    ui.monospace("L");
+                    ui.end_row();
+
+                    ui.label("Recall A/B Snapshot A – D");
+                    ui.monospace("F5 / F6 / F7 / F8");
+                    ui.end_row();
+
+                    ui.label("Store Current to Snapshot A – D");
+                    ui.monospace("Shift + F5..F8");
+                    ui.end_row();
+
+                    ui.label("Pan Canvas Viewport");
+                    ui.monospace("Space / Alt + Drag, Middle Drag");
+                    ui.end_row();
+
+                    ui.label("Zoom In / Out");
+                    ui.monospace("Mouse Scroll Wheel");
+                    ui.end_row();
+
+                    ui.label("Reset Zoom (1:1 100%)");
+                    ui.monospace("HUD [1:1]");
+                    ui.end_row();
+
+                    ui.label("Toggle Pixel Grid (at >=800%)");
+                    ui.monospace("HUD [Grid]");
+                    ui.end_row();
+
+                    ui.label("Toggle Shortcuts Cheatsheet");
+                    ui.monospace("F1 / ?");
+                    ui.end_row();
+                });
+                ui.add_space(8.0);
+                if ui.button("Close").clicked() {
+                    close_requested = true;
+                }
+            });
+            if close_requested {
+                is_open = false;
+            }
+            self.show_shortcuts_dialog = is_open;
         }
 
         // Telemetry HUD Window
@@ -2287,7 +2418,7 @@ impl eframe::App for DitherCraftApp {
                 }
 
                 // Floating Viewport HUD
-                let hud_size = egui::vec2(280.0, 34.0);
+                let hud_size = egui::vec2(340.0, 34.0);
                 let hud_rect = egui::Rect::from_min_size(egui::pos2(available_rect.max.x - hud_size.x - 16.0, available_rect.min.y + 16.0), hud_size);
 
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(hud_rect), |ui| {
@@ -2313,9 +2444,92 @@ impl eframe::App for DitherCraftApp {
                             }
                             ui.separator();
                             ui.checkbox(&mut self.show_pixel_grid, "Grid");
+                            ui.checkbox(&mut self.show_loupe, "Loupe");
                         });
                     });
                 });
+
+                // Floating Precision Magnifier Loupe & Subpixel Inspector
+                if self.show_loupe
+                    && let Some(pointer_pos) = response.hover_pos()
+                {
+                    let rel_x = (pointer_pos.x - img_rect.min.x) / self.canvas_zoom;
+                    let rel_y = (pointer_pos.y - img_rect.min.y) / self.canvas_zoom;
+                    if rel_x >= 0.0 && rel_x < tex_w && rel_y >= 0.0 && rel_y < tex_h {
+                        let cur_x = (rel_x as usize).min(tex_w as usize - 1);
+                        let cur_y = (rel_y as usize).min(tex_h as usize - 1);
+                        if let Some(ref img) = self.rendered_image {
+                            let center_color = img.get_pixel(cur_x as u32, cur_y as u32).unwrap_or(RgbColor::new(0, 0, 0));
+                            let loupe_grid_size = 9;
+                            let cell_size = 13.0_f32;
+                            let grid_dim = loupe_grid_size as f32 * cell_size;
+                            let loupe_w = grid_dim + 20.0;
+                            let loupe_h = grid_dim + 56.0;
+
+                            let mut loupe_pos = pointer_pos + egui::vec2(20.0, 20.0);
+                            if loupe_pos.x + loupe_w > available_rect.max.x {
+                                loupe_pos.x = pointer_pos.x - loupe_w - 20.0;
+                            }
+                            if loupe_pos.y + loupe_h > available_rect.max.y {
+                                loupe_pos.y = pointer_pos.y - loupe_h - 20.0;
+                            }
+
+                            let loupe_rect = egui::Rect::from_min_size(loupe_pos, egui::vec2(loupe_w, loupe_h));
+                            clipped_painter.rect_filled(loupe_rect, 6.0, Color32::from_black_alpha(235));
+                            clipped_painter.rect_stroke(loupe_rect, 6.0, egui::Stroke::new(1.5_f32, Color32::from_gray(180)));
+
+                            let grid_origin = loupe_pos + egui::vec2(10.0, 10.0);
+                            let half = (loupe_grid_size / 2) as isize;
+
+                            for gy in -half..=half {
+                                for gx in -half..=half {
+                                    let px = (cur_x as isize + gx).clamp(0, img.width as isize - 1) as u32;
+                                    let py = (cur_y as isize + gy).clamp(0, img.height as isize - 1) as u32;
+                                    let c = img.get_pixel(px, py).unwrap_or(RgbColor::new(0, 0, 0));
+                                    let cell_color = Color32::from_rgb(c.r, c.g, c.b);
+                                    let cell_rect = egui::Rect::from_min_size(
+                                        grid_origin + egui::vec2((gx + half) as f32 * cell_size, (gy + half) as f32 * cell_size),
+                                        egui::vec2(cell_size, cell_size),
+                                    );
+                                    clipped_painter.rect_filled(cell_rect, 0.0, cell_color);
+                                    clipped_painter.rect_stroke(cell_rect, 0.0, egui::Stroke::new(0.5_f32, Color32::from_black_alpha(50)));
+
+                                    if gx == 0 && gy == 0 {
+                                        clipped_painter.rect_stroke(cell_rect, 0.0, egui::Stroke::new(2.0_f32, Color32::WHITE));
+                                    }
+                                }
+                            }
+
+                            // Subpixel coordinates & color banner
+                            let hex_str = format!("#{:02X}{:02X}{:02X}", center_color.r, center_color.g, center_color.b);
+                            let coord_str = format!("({}, {})", cur_x, cur_y);
+                            let rgb_str = format!("RGB: {}, {}, {}", center_color.r, center_color.g, center_color.b);
+
+                            let info_y = grid_origin.y + grid_dim + 6.0;
+                            clipped_painter.text(
+                                egui::pos2(loupe_pos.x + 10.0, info_y),
+                                egui::Align2::LEFT_TOP,
+                                coord_str,
+                                egui::FontId::monospace(10.0),
+                                Color32::from_gray(220),
+                            );
+                            clipped_painter.text(
+                                egui::pos2(loupe_pos.x + loupe_w - 10.0, info_y),
+                                egui::Align2::RIGHT_TOP,
+                                hex_str,
+                                egui::FontId::monospace(10.0),
+                                Color32::YELLOW,
+                            );
+                            clipped_painter.text(
+                                egui::pos2(loupe_pos.x + 10.0, info_y + 13.0),
+                                egui::Align2::LEFT_TOP,
+                                rgb_str,
+                                egui::FontId::monospace(9.5),
+                                Color32::LIGHT_GRAY,
+                            );
+                        }
+                    }
+                }
             } else {
                 painter.text(
                     available_rect.center(),
@@ -2434,6 +2648,40 @@ impl eframe::App for DitherCraftApp {
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status_text);
+                ui.separator();
+                ui.label("Snapshots:");
+                for (idx, label) in ['A', 'B', 'C', 'D'].iter().enumerate() {
+                    let is_stored = self.snapshots[idx].is_some();
+                    let btn_text = if is_stored { format!("[{label}]") } else { format!(" {label} ") };
+                    let btn = ui.small_button(btn_text).on_hover_text(if let Some(ref s) = self.snapshots[idx] {
+                        format!(
+                            "Slot {label}: {} ({})\nClick to recall (F{})\nShift+Click or Right-Click to save current (Shift+F{})",
+                            s.algo,
+                            s.palette_name,
+                            idx + 5,
+                            idx + 5
+                        )
+                    } else {
+                        format!("Slot {label}: [Empty]\nClick or Right-Click to save current (Shift+F{})", idx + 5)
+                    });
+                    if btn.clicked() {
+                        if ctx.input(|i| i.modifiers.shift) || !is_stored {
+                            let snap = self.capture_preset(format!("Snapshot {label}"));
+                            self.status_text = format!("Stored Snapshot {label}: {} ({})", snap.algo, snap.palette_name);
+                            self.snapshots[idx] = Some(snap);
+                        } else if let Some(snap) = self.snapshots[idx].clone() {
+                            self.record_undo_state();
+                            self.apply_preset(&snap);
+                            self.status_text = format!("Recalled Snapshot {label}: {} ({})", snap.algo, snap.palette_name);
+                            self.trigger_render();
+                        }
+                    } else if btn.secondary_clicked() {
+                        let snap = self.capture_preset(format!("Snapshot {label}"));
+                        self.status_text = format!("Stored Snapshot {label}: {} ({})", snap.algo, snap.palette_name);
+                        self.snapshots[idx] = Some(snap);
+                    }
+                }
+                ui.separator();
                 ui.label(format!("Latency: {:.2} ms", self.render_latency_ms)).on_hover_text(format!(
                     "Pipeline Telemetry:\n• Dither: {:.2} ms\n• Effects: {:.2} ms\n• Histogram: {:.2} ms\n• Total: {:.2} ms",
                     self.telemetry_dither_ms, self.telemetry_effects_ms, self.telemetry_histogram_ms, self.render_latency_ms

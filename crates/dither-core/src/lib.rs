@@ -25,7 +25,7 @@ pub mod video;
 
 pub use algorithms::*;
 pub use audio::{AudioSpectrum, AudioTrack};
-pub use buffer::ImageBuffer;
+pub use buffer::{HilbertCurve, ImageBuffer, ImageBufferPool};
 pub use color::{LabColor, OklabColor, RgbColor};
 pub use color_depth::{LuminosityMapping, MismatchMode};
 pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen, VintageCrtSimulation};
