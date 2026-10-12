@@ -621,6 +621,509 @@ fn parse_stbl(payload: &[u8]) -> Result<StblInfo, DitherError> {
     Ok(info)
 }
 
+// ============================================================================
+// WebM / Matroska EBML Container Demuxer
+// ============================================================================
+
+/// Information and sample table for a parsed WebM / Matroska track.
+#[derive(Debug, Clone)]
+pub struct WebmTrack {
+    pub track_number: u64,
+    pub track_type: u64, // 1 = Video, 2 = Audio
+    pub codec_id: String,
+    pub width: u32,
+    pub height: u32,
+    pub samples: Vec<WebmSample>,
+}
+
+impl WebmTrack {
+    pub fn nominal_fps(&self) -> f32 {
+        30.0
+    }
+}
+
+/// A single video or audio sample (block) inside a WebM Cluster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebmSample {
+    pub track_number: u64,
+    pub timecode: i16,
+    pub is_keyframe: bool,
+    pub offset: u64,
+    pub size: u32,
+}
+
+/// Parsed WebM container metadata and sample directory.
+#[derive(Debug, Clone)]
+pub struct WebmDemuxer {
+    pub tracks: Vec<WebmTrack>,
+    pub timecode_scale: u64,
+}
+
+impl WebmDemuxer {
+    /// Parse a WebM or Matroska container byte buffer with zero external dependencies.
+    pub fn parse(bytes: &[u8]) -> Result<Self, DitherError> {
+        if bytes.len() < 12 {
+            return Err(DitherError::InvalidParameter("WebM buffer too short".into()));
+        }
+
+        let mut offset = 0;
+        let ebml_id = read_ebml_id(bytes, &mut offset).ok_or_else(|| DitherError::InvalidParameter("Failed to read EBML ID".into()))?;
+
+        if ebml_id != 0x1A45DFA3 {
+            return Err(DitherError::InvalidParameter("Not a valid EBML/WebM container".into()));
+        }
+
+        let ebml_size = read_ebml_size(bytes, &mut offset).ok_or_else(|| DitherError::InvalidParameter("Failed to read EBML header size".into()))?;
+        offset = (offset + ebml_size as usize).min(bytes.len());
+
+        let mut tracks = Vec::new();
+        let mut timecode_scale = 1_000_000u64; // default 1ms
+
+        while offset + 4 < bytes.len() {
+            let elem_id = match read_ebml_id(bytes, &mut offset) {
+                Some(id) => id,
+                None => break,
+            };
+            let elem_size = match read_ebml_size(bytes, &mut offset) {
+                Some(sz) => sz,
+                None => break,
+            };
+
+            let elem_end =
+                if elem_size == u64::MAX || (offset + elem_size as usize) > bytes.len() { bytes.len() } else { offset + elem_size as usize };
+
+            match elem_id {
+                0x18538067 => {
+                    // Segment: recurse inside its child elements
+                    let mut seg_offset = offset;
+                    while seg_offset + 4 < elem_end {
+                        let child_id = match read_ebml_id(bytes, &mut seg_offset) {
+                            Some(id) => id,
+                            None => break,
+                        };
+                        let child_size = match read_ebml_size(bytes, &mut seg_offset) {
+                            Some(sz) => sz,
+                            None => break,
+                        };
+                        let child_end = (seg_offset + child_size as usize).min(elem_end);
+
+                        match child_id {
+                            0x1549A966 => {
+                                // Info: parse TimecodeScale
+                                let mut info_offset = seg_offset;
+                                while info_offset + 2 < child_end {
+                                    if let Some(prop_id) = read_ebml_id(bytes, &mut info_offset)
+                                        && let Some(prop_size) = read_ebml_size(bytes, &mut info_offset)
+                                    {
+                                        if prop_id == 0x2AD7B1 {
+                                            timecode_scale = read_ebml_uint(bytes, info_offset, prop_size as usize);
+                                        }
+                                        info_offset = (info_offset + prop_size as usize).min(child_end);
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                            0x1654AE6B => {
+                                // Tracks: parse TrackEntry elements
+                                let mut trk_offset = seg_offset;
+                                while trk_offset + 2 < child_end {
+                                    if let Some(entry_id) = read_ebml_id(bytes, &mut trk_offset)
+                                        && let Some(entry_size) = read_ebml_size(bytes, &mut trk_offset)
+                                    {
+                                        let entry_end = (trk_offset + entry_size as usize).min(child_end);
+                                        if entry_id == 0xAE
+                                            && let Some(track) = parse_webm_track_entry(bytes, trk_offset, entry_end)
+                                        {
+                                            tracks.push(track);
+                                        }
+                                        trk_offset = entry_end;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                            0x1F43B675 => {
+                                // Cluster: parse SimpleBlock and Block elements
+                                parse_webm_cluster(bytes, seg_offset, child_end, &mut tracks);
+                            }
+                            _ => {}
+                        }
+
+                        seg_offset = child_end;
+                    }
+                    offset = elem_end;
+                }
+                _ => {
+                    offset = elem_end;
+                }
+            }
+        }
+
+        if tracks.is_empty() {
+            return Err(DitherError::InvalidParameter("No tracks found in WebM container".into()));
+        }
+
+        Ok(Self { tracks, timecode_scale })
+    }
+
+    /// Retrieve the primary video track, if present.
+    pub fn primary_video_track(&self) -> Option<&WebmTrack> {
+        self.tracks.iter().find(|t| t.track_type == 1)
+    }
+
+    /// Read raw sample byte slice safely.
+    pub fn get_sample_bytes<'a>(&self, sample: &WebmSample, file_bytes: &'a [u8]) -> Option<&'a [u8]> {
+        let start = sample.offset as usize;
+        let end = start.checked_add(sample.size as usize)?;
+        if end <= file_bytes.len() { Some(&file_bytes[start..end]) } else { None }
+    }
+}
+
+fn parse_webm_track_entry(bytes: &[u8], mut offset: usize, end: usize) -> Option<WebmTrack> {
+    let mut track_number = 1u64;
+    let mut track_type = 1u64;
+    let mut codec_id = String::new();
+    let mut width = 0u32;
+    let mut height = 0u32;
+
+    while offset + 2 < end {
+        let prop_id = read_ebml_id(bytes, &mut offset)?;
+        let prop_size = read_ebml_size(bytes, &mut offset)?;
+        let prop_end = (offset + prop_size as usize).min(end);
+
+        match prop_id {
+            0xD7 => track_number = read_ebml_uint(bytes, offset, prop_size as usize),
+            0x83 => track_type = read_ebml_uint(bytes, offset, prop_size as usize),
+            0x86 => {
+                if let Ok(s) = std::str::from_utf8(&bytes[offset..prop_end]) {
+                    codec_id = s.trim_matches('\0').to_string();
+                }
+            }
+            0xE0 => {
+                // Video settings container
+                let mut v_offset = offset;
+                while v_offset + 2 < prop_end {
+                    if let Some(vid_id) = read_ebml_id(bytes, &mut v_offset)
+                        && let Some(vid_sz) = read_ebml_size(bytes, &mut v_offset)
+                    {
+                        if vid_id == 0xB0 {
+                            width = read_ebml_uint(bytes, v_offset, vid_sz as usize) as u32;
+                        } else if vid_id == 0xBA {
+                            height = read_ebml_uint(bytes, v_offset, vid_sz as usize) as u32;
+                        }
+                        v_offset = (v_offset + vid_sz as usize).min(prop_end);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        offset = prop_end;
+    }
+
+    Some(WebmTrack { track_number, track_type, codec_id, width, height, samples: Vec::new() })
+}
+
+fn parse_webm_cluster(bytes: &[u8], mut offset: usize, end: usize, tracks: &mut [WebmTrack]) {
+    while offset + 2 < end {
+        let elem_id = match read_ebml_id(bytes, &mut offset) {
+            Some(id) => id,
+            None => break,
+        };
+        let elem_size = match read_ebml_size(bytes, &mut offset) {
+            Some(sz) => sz,
+            None => break,
+        };
+        let elem_end = (offset + elem_size as usize).min(end);
+
+        if elem_id == 0xA3 || elem_id == 0xA1 {
+            // SimpleBlock (0xA3) or Block (0xA1 inside BlockGroup)
+            let mut b_offset = offset;
+            if let Some(trk_num) = read_vint(bytes, &mut b_offset)
+                && b_offset + 3 <= elem_end
+            {
+                let timecode = i16::from_be_bytes([bytes[b_offset], bytes[b_offset + 1]]);
+                let flags = bytes[b_offset + 2];
+                let is_keyframe = (flags & 0x80) != 0;
+                b_offset += 3;
+
+                let payload_offset = b_offset as u64;
+                let payload_size = (elem_end - b_offset) as u32;
+
+                if let Some(track) = tracks.iter_mut().find(|t| t.track_number == trk_num) {
+                    track.samples.push(WebmSample { track_number: trk_num, timecode, is_keyframe, offset: payload_offset, size: payload_size });
+                }
+            }
+        }
+
+        offset = elem_end;
+    }
+}
+
+fn read_vint(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    if *offset >= bytes.len() {
+        return None;
+    }
+    let first = bytes[*offset];
+    let (len, mask) = if first & 0x80 != 0 {
+        (1, 0x7F)
+    } else if first & 0x40 != 0 {
+        (2, 0x3F)
+    } else if first & 0x20 != 0 {
+        (3, 0x1F)
+    } else if first & 0x10 != 0 {
+        (4, 0x0F)
+    } else if first & 0x08 != 0 {
+        (5, 0x07)
+    } else if first & 0x04 != 0 {
+        (6, 0x03)
+    } else if first & 0x02 != 0 {
+        (7, 0x01)
+    } else if first & 0x01 != 0 {
+        (8, 0x00)
+    } else {
+        return None;
+    };
+
+    if *offset + len > bytes.len() {
+        return None;
+    }
+    let mut val = (first & mask) as u64;
+    for i in 1..len {
+        val = (val << 8) | (bytes[*offset + i] as u64);
+    }
+    *offset += len;
+    Some(val)
+}
+
+fn read_ebml_id(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    if *offset >= bytes.len() {
+        return None;
+    }
+    let first = bytes[*offset];
+    let len = if first & 0x80 != 0 {
+        1
+    } else if first & 0x40 != 0 {
+        2
+    } else if first & 0x20 != 0 {
+        3
+    } else if first & 0x10 != 0 {
+        4
+    } else {
+        return None;
+    };
+
+    if *offset + len > bytes.len() {
+        return None;
+    }
+    let mut id = 0u32;
+    for i in 0..len {
+        id = (id << 8) | (bytes[*offset + i] as u32);
+    }
+    *offset += len;
+    Some(id)
+}
+
+fn read_ebml_size(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    read_vint(bytes, offset)
+}
+
+fn read_ebml_uint(bytes: &[u8], offset: usize, len: usize) -> u64 {
+    let end = (offset + len).min(bytes.len());
+    let mut val = 0u64;
+    for &b in &bytes[offset..end] {
+        val = (val << 8) | (b as u64);
+    }
+    val
+}
+
+/// A single animation frame to be packed into an Animated WebP container.
+#[derive(Debug, Clone)]
+pub struct WebpAnimFrame {
+    /// Frame presentation duration in milliseconds.
+    pub duration_ms: u32,
+    /// Horizontal offset on canvas (must be even).
+    pub x: u32,
+    /// Vertical offset on canvas (must be even).
+    pub y: u32,
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// WebP image subchunk (VP8L or VP8 chunk including FourCC tag and length).
+    pub payload: Vec<u8>,
+}
+
+/// Pure-Rust Animated WebP container muxer and builder.
+///
+/// Packages individual VP8/VP8L bitstream chunks into a valid RIFF container
+/// with VP8X extended headers, ANIM control chunks, and ANMF frame subchunks.
+#[derive(Debug, Clone, Default)]
+pub struct WebpAnimationMuxer {
+    pub canvas_width: u32,
+    pub canvas_height: u32,
+    pub loop_count: u16,
+    pub background_color: [u8; 4],
+    pub frames: Vec<WebpAnimFrame>,
+}
+
+impl WebpAnimationMuxer {
+    /// Create a new animated WebP muxer for the specified canvas dimensions.
+    pub fn new(canvas_width: u32, canvas_height: u32) -> Self {
+        Self {
+            canvas_width,
+            canvas_height,
+            loop_count: 0, // 0 = infinite loop
+            background_color: [0, 0, 0, 0],
+            frames: Vec::new(),
+        }
+    }
+
+    /// Set loop count (0 = infinite loop).
+    pub fn with_loop_count(mut self, loop_count: u16) -> Self {
+        self.loop_count = loop_count;
+        self
+    }
+
+    /// Add a frame to the animation sequence.
+    pub fn add_frame(&mut self, frame: WebpAnimFrame) {
+        self.frames.push(frame);
+    }
+
+    /// Helper to extract the primary image subchunk (`VP8L` or `VP8 `) from a
+    /// standalone single-frame WebP byte buffer.
+    pub fn extract_image_chunk(single_frame_webp: &[u8]) -> Option<&[u8]> {
+        if single_frame_webp.len() < 20 {
+            return None;
+        }
+        if &single_frame_webp[0..4] != b"RIFF" || &single_frame_webp[8..12] != b"WEBP" {
+            return None;
+        }
+
+        let mut offset = 12;
+        while offset + 8 <= single_frame_webp.len() {
+            let tag = &single_frame_webp[offset..offset + 4];
+            let chunk_len = u32::from_le_bytes([
+                single_frame_webp[offset + 4],
+                single_frame_webp[offset + 5],
+                single_frame_webp[offset + 6],
+                single_frame_webp[offset + 7],
+            ]) as usize;
+
+            let total_chunk_len = 8 + chunk_len + (chunk_len % 2);
+            if offset + total_chunk_len > single_frame_webp.len() {
+                return None;
+            }
+
+            if tag == b"VP8L" || tag == b"VP8 " {
+                return Some(&single_frame_webp[offset..offset + total_chunk_len]);
+            }
+
+            offset += total_chunk_len;
+        }
+
+        None
+    }
+
+    /// Assemble and build the final Animated WebP byte stream.
+    pub fn build(&self) -> Result<Vec<u8>, DitherError> {
+        if self.canvas_width == 0 || self.canvas_height == 0 {
+            return Err(DitherError::ZeroDimension);
+        }
+        if self.frames.is_empty() {
+            return Err(DitherError::InvalidParameter("Animation muxer requires at least one frame".into()));
+        }
+
+        let mut buf = Vec::new();
+
+        // 1. RIFF Header placeholder (12 bytes: RIFF + 4-byte size + WEBP)
+        buf.extend_from_slice(b"RIFF\0\0\0\0WEBP");
+
+        // 2. VP8X Chunk (Extended WebP header)
+        buf.extend_from_slice(b"VP8X");
+        buf.extend_from_slice(&10u32.to_le_bytes()); // Chunk size: 10 bytes
+
+        // Flags: Bit 1 is Animation (0x02)
+        buf.push(0x02);
+        // Reserved (3 bytes)
+        buf.extend_from_slice(&[0, 0, 0]);
+        // Canvas width minus 1 (3 bytes LE)
+        let w_minus_1 = self.canvas_width.saturating_sub(1);
+        buf.push(w_minus_1 as u8);
+        buf.push((w_minus_1 >> 8) as u8);
+        buf.push((w_minus_1 >> 16) as u8);
+        // Canvas height minus 1 (3 bytes LE)
+        let h_minus_1 = self.canvas_height.saturating_sub(1);
+        buf.push(h_minus_1 as u8);
+        buf.push((h_minus_1 >> 8) as u8);
+        buf.push((h_minus_1 >> 16) as u8);
+
+        // 3. ANIM Chunk (Animation control)
+        buf.extend_from_slice(b"ANIM");
+        buf.extend_from_slice(&6u32.to_le_bytes()); // Chunk size: 6 bytes
+        buf.extend_from_slice(&self.background_color); // 4 bytes RGBA background
+        buf.extend_from_slice(&self.loop_count.to_le_bytes()); // 2 bytes loop count
+
+        // 4. ANMF Chunks (One per frame)
+        for frame in &self.frames {
+            let anmf_payload_size = 16 + frame.payload.len();
+            buf.extend_from_slice(b"ANMF");
+            buf.extend_from_slice(&(anmf_payload_size as u32).to_le_bytes());
+
+            // 16-byte ANMF Header
+            // Frame X / 2 (3 bytes LE)
+            let fx = frame.x / 2;
+            buf.push(fx as u8);
+            buf.push((fx >> 8) as u8);
+            buf.push((fx >> 16) as u8);
+
+            // Frame Y / 2 (3 bytes LE)
+            let fy = frame.y / 2;
+            buf.push(fy as u8);
+            buf.push((fy >> 8) as u8);
+            buf.push((fy >> 16) as u8);
+
+            // Frame Width minus 1 (3 bytes LE)
+            let fw = frame.width.saturating_sub(1);
+            buf.push(fw as u8);
+            buf.push((fw >> 8) as u8);
+            buf.push((fw >> 16) as u8);
+
+            // Frame Height minus 1 (3 bytes LE)
+            let fh = frame.height.saturating_sub(1);
+            buf.push(fh as u8);
+            buf.push((fh >> 8) as u8);
+            buf.push((fh >> 16) as u8);
+
+            // Duration in ms (3 bytes LE)
+            let dur = frame.duration_ms;
+            buf.push(dur as u8);
+            buf.push((dur >> 8) as u8);
+            buf.push((dur >> 16) as u8);
+
+            // Flags: 0x02 = do not blend, overwrite canvas
+            buf.push(0x02);
+
+            // Frame subchunk payload (VP8L / VP8)
+            buf.extend_from_slice(&frame.payload);
+
+            // Padding if ANMF payload size is odd
+            if anmf_payload_size % 2 == 1 {
+                buf.push(0);
+            }
+        }
+
+        // 5. Finalize RIFF file size (total length - 8 bytes)
+        let riff_size = (buf.len().saturating_sub(8)) as u32;
+        buf[4..8].copy_from_slice(&riff_size.to_le_bytes());
+
+        Ok(buf)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -790,5 +1293,112 @@ mod tests {
         assert_eq!(video.samples[0].size, 4096);
         assert_eq!(video.samples[1].offset, 5096);
         assert_eq!(video.samples[1].size, 2048);
+    }
+
+    #[test]
+    fn test_webm_container_parsing_and_demuxing() {
+        let mut buf = Vec::new();
+
+        // 1. EBML header: 0x1A45DFA3 + size (0x84 = 4 bytes) + 4 dummy bytes
+        buf.extend_from_slice(&[0x1A, 0x45, 0xDF, 0xA3]);
+        buf.extend_from_slice(&[0x84, 0x42, 0x86, 0x81, 0x01]);
+
+        // 2. Segment container: 0x18538067
+        let mut segment = Vec::new();
+
+        // 2a. Info
+        let mut info = Vec::new();
+        info.extend_from_slice(&[0x2A, 0xD7, 0xB1, 0x84, 0x00, 0x0F, 0x42, 0x40]);
+        segment.extend_from_slice(&[0x15, 0x49, 0xA9, 0x66]);
+        segment.push(0x80 | (info.len() as u8));
+        segment.extend_from_slice(&info);
+
+        // 2b. Tracks
+        let mut tracks = Vec::new();
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&[0xD7, 0x81, 0x01]); // TrackNumber: 1
+        entry.extend_from_slice(&[0x83, 0x81, 0x01]); // TrackType: 1
+        entry.extend_from_slice(&[0x86, 0x85, b'V', b'_', b'V', b'P', b'8']); // CodecID: V_VP8
+
+        let mut video = Vec::new();
+        video.extend_from_slice(&[0xB0, 0x82, 0x02, 0x80]); // Width 640
+        video.extend_from_slice(&[0xBA, 0x82, 0x01, 0xE0]); // Height 480
+        entry.extend_from_slice(&[0xE0, 0x80 | (video.len() as u8)]);
+        entry.extend_from_slice(&video);
+
+        tracks.extend_from_slice(&[0xAE, 0x80 | (entry.len() as u8)]);
+        tracks.extend_from_slice(&entry);
+
+        segment.extend_from_slice(&[0x16, 0x54, 0xAE, 0x6B]);
+        segment.push(0x80 | (tracks.len() as u8));
+        segment.extend_from_slice(&tracks);
+
+        // 2c. Cluster
+        let mut cluster = Vec::new();
+        cluster.extend_from_slice(&[0xE7, 0x81, 0x00]);
+        let sblock = vec![0x81, 0x00, 0x00, 0x80, 1, 2, 3, 4];
+        cluster.extend_from_slice(&[0xA3, 0x80 | (sblock.len() as u8)]);
+        cluster.extend_from_slice(&sblock);
+
+        segment.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75]);
+        segment.push(0x80 | (cluster.len() as u8));
+        segment.extend_from_slice(&cluster);
+
+        // Segment header
+        buf.extend_from_slice(&[0x18, 0x53, 0x80, 0x67]);
+        buf.push(0x80 | (segment.len() as u8));
+        buf.extend_from_slice(&segment);
+
+        // Demux WebM
+        let demuxer = WebmDemuxer::parse(&buf).expect("parse webm");
+        assert_eq!(demuxer.timecode_scale, 1_000_000);
+        let video = demuxer.primary_video_track().expect("video track");
+        assert_eq!(video.track_number, 1);
+        assert_eq!(video.track_type, 1);
+        assert_eq!(video.codec_id, "V_VP8");
+        assert_eq!(video.width, 640);
+        assert_eq!(video.height, 480);
+        assert_eq!(video.samples.len(), 1);
+        assert!(video.samples[0].is_keyframe);
+        assert_eq!(video.samples[0].size, 4);
+
+        let sample_bytes = demuxer.get_sample_bytes(&video.samples[0], &buf).expect("sample bytes");
+        assert_eq!(sample_bytes, &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_animated_webp_muxing_and_chunk_structure() {
+        // Create synthetic VP8L subchunks: FourCC + 4-byte len + payload
+        let mut vp8l_chunk1 = Vec::new();
+        vp8l_chunk1.extend_from_slice(b"VP8L");
+        vp8l_chunk1.extend_from_slice(&4u32.to_le_bytes());
+        vp8l_chunk1.extend_from_slice(&[10, 20, 30, 40]);
+
+        let mut vp8l_chunk2 = Vec::new();
+        vp8l_chunk2.extend_from_slice(b"VP8L");
+        vp8l_chunk2.extend_from_slice(&4u32.to_le_bytes());
+        vp8l_chunk2.extend_from_slice(&[50, 60, 70, 80]);
+
+        let mut muxer = WebpAnimationMuxer::new(320, 240);
+        muxer.add_frame(WebpAnimFrame { duration_ms: 120, x: 0, y: 0, width: 320, height: 240, payload: vp8l_chunk1.clone() });
+        muxer.add_frame(WebpAnimFrame { duration_ms: 250, x: 0, y: 0, width: 320, height: 240, payload: vp8l_chunk2 });
+
+        let webp_bytes = muxer.build().expect("build animated webp");
+        assert!(webp_bytes.len() >= 32);
+        assert_eq!(&webp_bytes[0..4], b"RIFF");
+        assert_eq!(&webp_bytes[8..12], b"WEBP");
+        assert_eq!(&webp_bytes[12..16], b"VP8X");
+        assert_eq!(&webp_bytes[30..34], b"ANIM");
+
+        // Verify synthetic standalone webp chunk extraction
+        let mut standalone = Vec::new();
+        standalone.extend_from_slice(b"RIFF");
+        let stand_len = (4 + vp8l_chunk1.len()) as u32;
+        standalone.extend_from_slice(&stand_len.to_le_bytes());
+        standalone.extend_from_slice(b"WEBP");
+        standalone.extend_from_slice(&vp8l_chunk1);
+
+        let extracted = WebpAnimationMuxer::extract_image_chunk(&standalone).expect("extract chunk");
+        assert_eq!(extracted, &vp8l_chunk1);
     }
 }

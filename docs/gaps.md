@@ -81,6 +81,29 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
   - Added CLI `extract-palette` command for automated palette generation from images via Median-Cut and K-Means.
   - Added exact-match fast path in nearest-neighbor palette lookup, accelerating real-time histogram calculation by up to $10\times$.
 
+### 2.12 Pure-Rust EBML / WebM Container Demuxing
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented pure-Rust `WebmDemuxer` in `dither_core::video` decoding EBML variable-size integer IDs (VINT), Element Sizes, and Master Elements without external C/FFmpeg libraries.
+  - Demuxes `Segment`, `Info` (`TimecodeScale`), `Tracks` (`TrackEntry`, `TrackNumber`, `TrackType`, `CodecID` e.g. VP8/VP9/AV1, `PixelWidth`, `PixelHeight`), and `Cluster` (`SimpleBlock` / `Block`).
+  - Added direct `.webm` / `.mkv` media loading in the desktop workstation and `webm-info` inspection in the CLI.
+
+### 2.13 Pure-Rust Animated WebP Container Multiplexer & Modern Animation Pipeline
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented zero-dependency `WebpAnimationMuxer` and `WebpAnimFrame` in `dither_core::video` assembling valid RIFF WebP animation streams containing `VP8X` extended flags, `ANIM` background/loop parameters, and per-frame `ANMF` subchunks.
+  - Integrated "Export Animated WebP..." in the desktop workstation with parallel Rayon frame rendering and lossless `VP8L` bitstream compression.
+  - Verified bit-exact format compliance and decoding roundtrip with `image_webp::WebPDecoder`.
+
+### 2.14 Synchronized Audio WAV Slicing & Audio Reactive Timeline Loops
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented `AudioTrack::export_wav` and `AudioTrack::export_wav_slice` in `dither_core::audio` exporting 16-bit PCM standard RIFF WAV byte streams precisely matched to frame count and target FPS.
+  - Added "Export Synchronized Audio (.wav)..." to the desktop workstation File menu and `trim-audio` subcommand to the CLI.
+
+### 2.15 Structured Pipeline Telemetry & Interactive Stage Breakdown HUD
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented multi-stage latency telemetry tracking: Kernel Dither time (`dither_ms`), Downstream Effects stack time (`effects_ms`), Swatch Histogram quantization (`histogram_ms`), and total elapsed time.
+  - Added dedicated "View -> Pipeline Telemetry HUD" window displaying real-time stage performance alongside generation ID and engine state.
+  - Integrated status bar hover tooltip showing instantaneous per-stage telemetry.
+
 ---
 
 ## 3. Reliability & Zero-Panic Assurance

@@ -71,3 +71,51 @@ fn test_apng_generation_and_reading() {
 
     let _ = std::fs::remove_file(&apng_path);
 }
+
+#[test]
+fn test_animated_webp_generation_and_reading() {
+    use dither_core::{WebpAnimFrame, WebpAnimationMuxer};
+    use image::codecs::webp::{WebPDecoder, WebPEncoder};
+    use image::{AnimationDecoder, ExtendedColorType, ImageDecoder};
+
+    let tmp_dir = std::env::temp_dir();
+    let webp_path = tmp_dir.join("test_anim_src.webp");
+
+    let mut muxer = WebpAnimationMuxer::new(16, 16);
+
+    for i in 0..2 {
+        let mut rgb = Vec::new();
+        for _ in 0..(16 * 16) {
+            rgb.push((i * 100) as u8);
+            rgb.push(120);
+            rgb.push(200);
+        }
+
+        let mut single_webp = Vec::new();
+        let encoder = WebPEncoder::new_lossless(&mut single_webp);
+        encoder.encode(&rgb, 16, 16, ExtendedColorType::Rgb8).expect("encode frame");
+
+        let subchunk = WebpAnimationMuxer::extract_image_chunk(&single_webp).expect("extract chunk");
+        muxer.add_frame(WebpAnimFrame { duration_ms: 100, x: 0, y: 0, width: 16, height: 16, payload: subchunk.to_vec() });
+    }
+
+    let anim_bytes = muxer.build().expect("build animated webp");
+    std::fs::write(&webp_path, &anim_bytes).expect("write webp");
+
+    assert!(webp_path.exists());
+    let metadata = std::fs::metadata(&webp_path).expect("metadata");
+    assert!(metadata.len() > 0);
+
+    // Read back and decode using WebPDecoder
+    let file_in = std::fs::File::open(&webp_path).expect("open file");
+    let decoder = WebPDecoder::new(std::io::BufReader::new(file_in)).expect("decoder");
+    assert!(decoder.has_animation());
+    assert_eq!(decoder.dimensions(), (16, 16));
+
+    let frames = decoder.into_frames().collect_frames().expect("collect frames");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].buffer().width(), 16);
+    assert_eq!(frames[0].buffer().height(), 16);
+
+    let _ = std::fs::remove_file(&webp_path);
+}

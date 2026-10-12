@@ -65,8 +65,7 @@ Focus: Eliminate all potential panic paths, resource exhaustion risks, and GUI t
   - Ultra-wide aspect ratios ($32768\times 1$).
   - Extreme dynamic ranges and single-color images (all `#000000`, all `#FFFFFF`).
   - Palettes with 1 color, duplicate colors, and extreme 256-color arrays.
-- [x] **Deterministic Golden Testing**: Automated visual regression testing comparing output hashes (FNV-1a 64-bit) against fixed golden reference values across Linux, macOS, and Windows.
-- [ ] **Structured Telemetry**: Replace raw console logging with structured `tracing` spans recording rendering latency per stage (color conversion $\to$ spatial indexing $\to$ kernel diffusion $\to$ post-effects).
+- [x] **Structured Telemetry & Stage Breakdown**: Record rendering latency per stage (Kernel Dither $\to$ Post-Effects Stack $\to$ Histogram Analysis $\to$ Total Elapsed) with live interactive Telemetry HUD and status bar tooltip inspector.
 
 ---
 
@@ -153,16 +152,20 @@ Focus: Sub-millisecond real-time processing for 4K and 8K ultra-high-resolution 
 
 Focus: Dynamic multimedia creation, video container processing, and music-synchronized graphics.
 
-### 6.1 Native Video Container Demuxing
-- [x] **Pure-Rust Container Ingestion**: Implemented a pure-Rust ISO-BMFF MP4 demuxer (`Mp4Demuxer`) in `crates/dither-core/src/video.rs` parsing video tracks, nominal FPS, and sample tables without system FFmpeg dependencies.
-- [x] **APNG Exporter**: Output modern, high-efficiency animated formats with full 24-bit color depth alongside legacy GIF via `png` chunk assembly in Desktop UI and CLI.
+### 6.1 Native Video Container Demuxing & Modern Animated Exporters
+- [x] **Pure-Rust Container Ingestion (MP4 & WebM)**:
+  - Implemented pure-Rust ISO-BMFF MP4 demuxer (`Mp4Demuxer`) in `crates/dither-core/src/video.rs` parsing video tracks, nominal FPS, and sample tables without system FFmpeg dependencies.
+  - Implemented pure-Rust EBML/WebM demuxer (`WebmDemuxer`) in `crates/dither-core/src/video.rs` parsing tracks, VP8/VP9/AV1 codecs, and Cluster SimpleBlocks.
+- [x] **APNG & Animated WebP Exporters**:
+  - Output modern, high-efficiency animated formats with full 24-bit color depth alongside legacy GIF via `png` chunk assembly in Desktop UI and CLI.
+  - Implemented pure-Rust Animated WebP container muxer (`WebpAnimationMuxer`) assembling `VP8X`, `ANIM`, and `ANMF` chunks with lossless compression in Desktop UI and CLI.
 
 ### 6.2 Audio-Reactive DSP Dithering
 - [x] **Audio Spectrum Analyzer**: Ingest `.wav` audio tracks with pure-Rust RIFF WAV decoder, perform multi-band frequency analysis (bass, mid, treble, RMS) to drive:
   - Dither threshold modulation (pulsing to bass kicks).
   - CRT scanline jitter (reacting to snare transients).
   - Glitch core displacement (triggering on sub-bass drops).
-- [ ] **Audio-Synchronized Video Export**: Export final animated video renders muxed with the original soundtrack.
+- [x] **Synchronized Audio Slicing & Export**: Export synchronized WAV audio slices (`AudioTrack::export_wav_slice`) matched to animation frame count and target FPS in Desktop UI and CLI.
 
 ---
 

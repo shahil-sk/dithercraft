@@ -4,7 +4,7 @@ mod mcp;
 
 use clap::{Parser, Subcommand};
 use dither_core::{
-    ImageBuffer, Mp4Demuxer, algorithms::*, color::RgbColor, palette::Palette, renderers::*, temporal::TemporalNoisePattern,
+    AudioTrack, ImageBuffer, Mp4Demuxer, WebmDemuxer, algorithms::*, color::RgbColor, palette::Palette, renderers::*, temporal::TemporalNoisePattern,
     vector::BlackVectorIsolation,
 };
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
@@ -67,6 +67,22 @@ enum Commands {
     Mp4Info {
         #[arg(short, long)]
         input: PathBuf,
+    },
+    /// Inspect a WebM / Matroska container and list tracks, dimensions, codecs, and blocks
+    WebmInfo {
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+    /// Trim or slice a WAV audio file synchronized to target animation frames and FPS
+    TrimAudio {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(short, long, default_value_t = 60)]
+        frames: u32,
+        #[arg(long, default_value_t = 30)]
+        fps: u32,
     },
     /// Export darkest pixels as an isolated vector path SVG
     Svg {
@@ -361,6 +377,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     track.nominal_fps()
                 );
             }
+        }
+
+        Commands::WebmInfo { input } => {
+            let bytes = std::fs::read(&input)?;
+            let demuxer = WebmDemuxer::parse(&bytes)?;
+            println!("WebM Container: {}", input.display());
+            println!("  Timecode Scale: {} ns", demuxer.timecode_scale);
+            println!("  Tracks: {}", demuxer.tracks.len());
+            for track in &demuxer.tracks {
+                let type_str = if track.track_type == 1 {
+                    "Video"
+                } else if track.track_type == 2 {
+                    "Audio"
+                } else {
+                    "Other"
+                };
+                println!(
+                    "    Track #{}: Type={}, {}x{}, Codec={}, Blocks={}",
+                    track.track_number,
+                    type_str,
+                    track.width,
+                    track.height,
+                    track.codec_id,
+                    track.samples.len()
+                );
+            }
+        }
+
+        Commands::TrimAudio { input, output, frames, fps } => {
+            let bytes = std::fs::read(&input)?;
+            let track = AudioTrack::parse_wav(&bytes)?;
+            let slice = track.export_wav_slice(frames, fps);
+            std::fs::write(&output, slice)?;
+            let duration_sec = frames as f64 / fps.max(1) as f64;
+            println!("Trimmed WAV audio from {} -> {} ({} frames @ {} FPS = {:.2}s)", input.display(), output.display(), frames, fps, duration_sec);
         }
 
         Commands::Svg { input, output, threshold } => {

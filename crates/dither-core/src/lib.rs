@@ -37,4 +37,4 @@ pub use vector::{
     BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, Point2D, ToolpathStroke, export_smooth_bezier_svg,
     fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
 };
-pub use video::{Mp4Demuxer, Mp4Sample, Mp4Track, VideoCodec};
+pub use video::{Mp4Demuxer, Mp4Sample, Mp4Track, VideoCodec, WebmDemuxer, WebmSample, WebmTrack, WebpAnimFrame, WebpAnimationMuxer};

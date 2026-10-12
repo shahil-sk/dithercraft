@@ -1,7 +1,7 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use dither_core::{
-    AudioSpectrum, AudioTrack, ImageBuffer, Mp4Demuxer,
+    AudioSpectrum, AudioTrack, ImageBuffer, Mp4Demuxer, WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
     algorithms::*,
     color::RgbColor,
     effects::*,
@@ -13,6 +13,7 @@ use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::{AnimationDecoder, Frame, RgbaImage};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -288,6 +289,9 @@ impl StudioPreset {
 struct RenderJobResult {
     buffer: ImageBuffer,
     duration_ms: f64,
+    dither_ms: f64,
+    effects_ms: f64,
+    histogram_ms: f64,
     gen_id: u64,
     swatch_counts: Vec<usize>,
 }
@@ -340,6 +344,10 @@ pub struct DitherCraftApp {
     debounce_mode: bool,
     status_text: String,
     render_latency_ms: f64,
+    telemetry_dither_ms: f64,
+    telemetry_effects_ms: f64,
+    telemetry_histogram_ms: f64,
+    show_telemetry_hud: bool,
 
     // Viewport Split-View
     split_view_enabled: bool,
@@ -393,6 +401,10 @@ pub struct DitherCraftApp {
     audio_track: Option<AudioTrack>,
     audio_spectrum: AudioSpectrum,
     audio_reactive_enabled: bool,
+
+    // File tracking
+    source_path: Option<PathBuf>,
+    recent_files: Vec<PathBuf>,
 }
 
 impl DitherCraftApp {
@@ -469,6 +481,10 @@ impl DitherCraftApp {
             debounce_mode: false,
             status_text: "Ready".into(),
             render_latency_ms: 0.0,
+            telemetry_dither_ms: 0.0,
+            telemetry_effects_ms: 0.0,
+            telemetry_histogram_ms: 0.0,
+            show_telemetry_hud: false,
 
             split_view_enabled: false,
             split_mode: SplitViewMode::default(),
@@ -510,6 +526,187 @@ impl DitherCraftApp {
             audio_track: None,
             audio_spectrum: AudioSpectrum::default(),
             audio_reactive_enabled: false,
+
+            source_path: None,
+            recent_files: Vec::new(),
+        }
+    }
+
+    fn suggested_filename(&self, ext: &str) -> String {
+        let stem = self.source_path.as_ref().and_then(|p| p.file_stem()).and_then(|s| s.to_str()).unwrap_or("dither");
+        let algo = self.selected_algo.to_lowercase().replace(' ', "-");
+        let pal = self.active_palette.name.to_lowercase().replace(' ', "-");
+        format!("{stem}_{algo}_{pal}.{ext}")
+    }
+
+    fn add_recent_file(&mut self, path: PathBuf) {
+        self.recent_files.retain(|p| p != &path);
+        self.recent_files.insert(0, path);
+        if self.recent_files.len() > 10 {
+            self.recent_files.truncate(10);
+        }
+    }
+
+    fn shuffle_adjustments(&mut self) {
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let mut state = seed as u64;
+        let mut next_f32 = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((state >> 33) as f32) / ((1u32 << 31) as f32)
+        };
+        self.crt_scanline = (next_f32() * 0.7).clamp(0.0, 1.0);
+        self.crt_barrel = (next_f32() * 0.25).clamp(0.0, 1.0);
+        self.crt_vignette = (next_f32() * 0.6).clamp(0.0, 1.0);
+        self.chromatic_shift = (next_f32() * 16.0 - 8.0) as i32;
+        self.glitch_intensity = (next_f32() * 0.75).clamp(0.0, 1.0);
+        self.glow_intensity = (next_f32() * 1.5).clamp(0.1, 2.0);
+        self.glow_radius = (next_f32() * 8.0) as usize + 1;
+        self.tonal_cycle_step = (next_f32() * 6.0) as usize;
+        self.status_text = "🎲 Shuffled effect adjustments".into();
+        self.trigger_render();
+    }
+
+    fn load_media_file(&mut self, path: &Path) {
+        self.source_path = Some(path.to_path_buf());
+        self.add_recent_file(path.to_path_buf());
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let is_gif = ext.eq_ignore_ascii_case("gif");
+        let is_mp4 = ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("m4v");
+        let is_webm = ext.eq_ignore_ascii_case("webm") || ext.eq_ignore_ascii_case("mkv");
+
+        if is_mp4 && let Ok(bytes) = std::fs::read(path) {
+            if let Ok(demuxer) = Mp4Demuxer::parse(&bytes)
+                && let Some(track) = demuxer.primary_video_track()
+            {
+                let mut frames = Vec::new();
+                for sample in &track.samples {
+                    if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
+                        && let Ok(dyn_img) = image::load_from_memory(s_bytes)
+                    {
+                        let rgb = dyn_img.to_rgb8();
+                        let (w, h) = rgb.dimensions();
+                        if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                            frames.push(Arc::new(buf));
+                            if frames.len() >= 300 {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if !frames.is_empty() {
+                    self.timeline_max_frames = frames.len() as u32;
+                    self.timeline_frame = 0;
+                    self.source_image = Some(frames[0].clone());
+                    self.source_frames = frames;
+                    let delay = (1000.0 / track.nominal_fps().max(1.0)) as u32;
+                    self.frame_delays = vec![delay; self.timeline_max_frames as usize];
+                    self.canvas_pan = egui::Vec2::ZERO;
+                    self.canvas_zoom = 1.0;
+                    self.status_text = format!("Loaded MP4 video ({} frames, {:.1} FPS)", self.source_frames.len(), track.nominal_fps());
+                    self.trigger_render();
+                } else {
+                    self.status_text = format!(
+                        "Parsed MP4 track: {}x{}, codec: {}, {} samples",
+                        track.width,
+                        track.height,
+                        track.codec.as_str(),
+                        track.samples.len()
+                    );
+                }
+            }
+        } else if is_webm && let Ok(bytes) = std::fs::read(path) {
+            if let Ok(demuxer) = WebmDemuxer::parse(&bytes)
+                && let Some(track) = demuxer.primary_video_track()
+            {
+                let mut frames = Vec::new();
+                for sample in &track.samples {
+                    if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
+                        && let Ok(dyn_img) = image::load_from_memory(s_bytes)
+                    {
+                        let rgb = dyn_img.to_rgb8();
+                        let (w, h) = rgb.dimensions();
+                        if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                            frames.push(Arc::new(buf));
+                            if frames.len() >= 300 {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if !frames.is_empty() {
+                    self.timeline_max_frames = frames.len() as u32;
+                    self.timeline_frame = 0;
+                    self.source_image = Some(frames[0].clone());
+                    self.source_frames = frames;
+                    let delay = (1000.0 / track.nominal_fps().max(1.0)) as u32;
+                    self.frame_delays = vec![delay; self.timeline_max_frames as usize];
+                    self.canvas_pan = egui::Vec2::ZERO;
+                    self.canvas_zoom = 1.0;
+                    self.status_text = format!("Loaded WebM video ({} frames, {:.1} FPS)", self.source_frames.len(), track.nominal_fps());
+                    self.trigger_render();
+                } else {
+                    self.status_text =
+                        format!("Parsed WebM track: {}x{}, codec: {}, {} blocks", track.width, track.height, track.codec_id, track.samples.len());
+                }
+            }
+        } else if is_gif
+            && let Ok(file) = std::fs::File::open(path)
+            && let Ok(decoder) = GifDecoder::new(std::io::BufReader::new(file))
+            && let Ok(mut raw_frames) = decoder.into_frames().collect_frames()
+            && !raw_frames.is_empty()
+        {
+            if raw_frames.len() > 300 {
+                raw_frames.truncate(300);
+            }
+            let mut frames = Vec::new();
+            let mut delays = Vec::new();
+            for frame in raw_frames {
+                let (w, h) = (frame.buffer().width(), frame.buffer().height());
+                if (w as u64) * (h as u64) > 16 * 1024 * 1024 {
+                    continue;
+                }
+                let (num, denom) = frame.delay().numer_denom_ms();
+                let delay_ms = num.checked_div(denom).map(|d| d.max(10)).unwrap_or(100);
+                let mut rgb_data = Vec::with_capacity((w * h * 3) as usize);
+                for px in frame.buffer().pixels() {
+                    rgb_data.push(px[0]);
+                    rgb_data.push(px[1]);
+                    rgb_data.push(px[2]);
+                }
+                if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb_data) {
+                    frames.push(Arc::new(buf));
+                    delays.push(delay_ms);
+                }
+            }
+            if !frames.is_empty() {
+                self.timeline_max_frames = frames.len() as u32;
+                self.timeline_frame = 0;
+                self.source_image = Some(frames[0].clone());
+                self.source_frames = frames;
+                self.frame_delays = delays;
+                self.canvas_pan = egui::Vec2::ZERO;
+                self.canvas_zoom = 1.0;
+                self.status_text = format!("Loaded animated GIF ({} frames)", self.source_frames.len());
+                self.trigger_render();
+            }
+        } else if let Ok(reader) = image::ImageReader::open(path)
+            && let Ok(dyn_img) = reader.decode()
+        {
+            let rgb = dyn_img.to_rgb8();
+            let (w, h) = rgb.dimensions();
+            if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                let arc_buf = Arc::new(buf);
+                self.source_image = Some(arc_buf.clone());
+                self.source_frames = vec![arc_buf];
+                self.frame_delays = vec![100];
+                self.timeline_max_frames = 60;
+                self.timeline_frame = 0;
+                self.canvas_pan = egui::Vec2::ZERO;
+                self.canvas_zoom = 1.0;
+                self.status_text = format!("Loaded static image ({w}x{h})");
+                self.trigger_render();
+            }
         }
     }
 
@@ -721,14 +918,17 @@ impl DitherCraftApp {
                 return;
             }
 
+            let t_dither = Instant::now();
             let algo: Box<dyn DitherAlgorithm> = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
 
             let mut out = algo.apply(&source, &palette).unwrap_or_else(|_| (*source).clone());
+            let dither_ms = t_dither.elapsed().as_secs_f64() * 1000.0;
 
             if cancel_token.load(Ordering::Relaxed) != gen_id {
                 return;
             }
 
+            let t_fx = Instant::now();
             // Post-effects stack
             if let Some(glow) = glow_opt {
                 out = glow.apply(&out).unwrap_or(out);
@@ -755,11 +955,13 @@ impl DitherCraftApp {
             if let Some((pattern, frame, intensity)) = temporal_opt {
                 out = pattern.apply(&out, frame, intensity).unwrap_or(out);
             }
+            let effects_ms = t_fx.elapsed().as_secs_f64() * 1000.0;
 
             if cancel_token.load(Ordering::Relaxed) != gen_id {
                 return;
             }
 
+            let t_hist = Instant::now();
             // Compute swatch utilization counts for live histogram
             let mut swatch_counts = vec![0usize; palette.swatches.len()];
             if !palette.swatches.is_empty() {
@@ -771,9 +973,10 @@ impl DitherCraftApp {
                     }
                 }
             }
+            let histogram_ms = t_hist.elapsed().as_secs_f64() * 1000.0;
 
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let _ = tx.send(RenderJobResult { buffer: out, duration_ms, gen_id, swatch_counts });
+            let _ = tx.send(RenderJobResult { buffer: out, duration_ms, dither_ms, effects_ms, histogram_ms, gen_id, swatch_counts });
             ctx.request_repaint();
         });
     }
@@ -883,6 +1086,9 @@ impl eframe::App for DitherCraftApp {
                 }
                 self.rendered_image = Some(result.buffer);
                 self.render_latency_ms = result.duration_ms;
+                self.telemetry_dither_ms = result.dither_ms;
+                self.telemetry_effects_ms = result.effects_ms;
+                self.telemetry_histogram_ms = result.histogram_ms;
                 self.is_rendering = false;
                 self.update_texture(ctx);
             }
@@ -902,120 +1108,48 @@ impl eframe::App for DitherCraftApp {
             self.redo();
         }
 
+        // Handle Drag & Drop
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if !dropped.is_empty() {
+            for file in dropped {
+                if let Some(path) = file.path {
+                    self.load_media_file(&path);
+                    break;
+                }
+            }
+        }
+
         // Top Menu Bar
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open Image, GIF, or Video...").clicked() {
-                        let path =
-                            rfd::FileDialog::new().add_filter("Media Files", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "m4v"]).pick_file();
+                        let path = rfd::FileDialog::new()
+                            .add_filter("Media Files", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "m4v", "webm", "mkv"])
+                            .pick_file();
                         if let Some(path) = path {
-                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                            let is_gif = ext.eq_ignore_ascii_case("gif");
-                            let is_mp4 = ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("m4v");
-
-                            if is_mp4 && let Ok(bytes) = std::fs::read(&path) {
-                                if let Ok(demuxer) = Mp4Demuxer::parse(&bytes)
-                                    && let Some(track) = demuxer.primary_video_track()
-                                {
-                                    let mut frames = Vec::new();
-                                    for sample in &track.samples {
-                                        if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
-                                            && let Ok(dyn_img) = image::load_from_memory(s_bytes)
-                                        {
-                                            let rgb = dyn_img.to_rgb8();
-                                            let (w, h) = rgb.dimensions();
-                                            if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
-                                                frames.push(Arc::new(buf));
-                                                if frames.len() >= 300 {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if !frames.is_empty() {
-                                        self.timeline_max_frames = frames.len() as u32;
-                                        self.timeline_frame = 0;
-                                        self.source_image = Some(frames[0].clone());
-                                        self.source_frames = frames;
-                                        let delay = (1000.0 / track.nominal_fps().max(1.0)) as u32;
-                                        self.frame_delays = vec![delay; self.timeline_max_frames as usize];
-                                        self.canvas_pan = egui::Vec2::ZERO;
-                                        self.canvas_zoom = 1.0;
-                                        self.status_text =
-                                            format!("Loaded MP4 video ({} frames, {:.1} FPS)", self.source_frames.len(), track.nominal_fps());
-                                        self.trigger_render();
-                                    } else {
-                                        self.status_text = format!(
-                                            "Parsed MP4 track: {}x{}, codec: {}, {} samples",
-                                            track.width,
-                                            track.height,
-                                            track.codec.as_str(),
-                                            track.samples.len()
-                                        );
-                                    }
-                                }
-                            } else if is_gif
-                                && let Ok(file) = std::fs::File::open(&path)
-                                && let Ok(decoder) = GifDecoder::new(std::io::BufReader::new(file))
-                                && let Ok(mut raw_frames) = decoder.into_frames().collect_frames()
-                                && !raw_frames.is_empty()
-                            {
-                                if raw_frames.len() > 300 {
-                                    raw_frames.truncate(300);
-                                }
-                                let mut frames = Vec::new();
-                                let mut delays = Vec::new();
-                                for frame in raw_frames {
-                                    let (w, h) = (frame.buffer().width(), frame.buffer().height());
-                                    if (w as u64) * (h as u64) > 16 * 1024 * 1024 {
-                                        continue;
-                                    }
-                                    let (num, denom) = frame.delay().numer_denom_ms();
-                                    let delay_ms = num.checked_div(denom).map(|d| d.max(10)).unwrap_or(100);
-                                    let mut rgb_data = Vec::with_capacity((w * h * 3) as usize);
-                                    for px in frame.buffer().pixels() {
-                                        rgb_data.push(px[0]);
-                                        rgb_data.push(px[1]);
-                                        rgb_data.push(px[2]);
-                                    }
-                                    if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb_data) {
-                                        frames.push(Arc::new(buf));
-                                        delays.push(delay_ms);
-                                    }
-                                }
-                                if !frames.is_empty() {
-                                    self.timeline_max_frames = frames.len() as u32;
-                                    self.timeline_frame = 0;
-                                    self.source_image = Some(frames[0].clone());
-                                    self.source_frames = frames;
-                                    self.frame_delays = delays;
-                                    self.canvas_pan = egui::Vec2::ZERO;
-                                    self.canvas_zoom = 1.0;
-                                    self.status_text = format!("Loaded animated GIF ({} frames)", self.source_frames.len());
-                                    self.trigger_render();
-                                }
-                            } else if let Ok(reader) = image::ImageReader::open(&path)
-                                && let Ok(dyn_img) = reader.decode()
-                            {
-                                let rgb = dyn_img.to_rgb8();
-                                let (w, h) = rgb.dimensions();
-                                if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
-                                    let arc_buf = Arc::new(buf);
-                                    self.source_image = Some(arc_buf.clone());
-                                    self.source_frames = vec![arc_buf];
-                                    self.frame_delays = vec![100];
-                                    self.timeline_max_frames = 60;
-                                    self.timeline_frame = 0;
-                                    self.canvas_pan = egui::Vec2::ZERO;
-                                    self.canvas_zoom = 1.0;
-                                    self.status_text = format!("Loaded static image ({w}x{h})");
-                                    self.trigger_render();
-                                }
-                            }
+                            self.load_media_file(&path);
                         }
                         ui.close_menu();
                     }
+
+                    ui.menu_button("Open Recent", |ui| {
+                        if self.recent_files.is_empty() {
+                            ui.label("No recent files");
+                        } else {
+                            let mut selected = None;
+                            for p in &self.recent_files {
+                                let label = p.file_name().and_then(|n| n.to_str()).unwrap_or("File");
+                                if ui.button(label).on_hover_text(p.display().to_string()).clicked() {
+                                    selected = Some(p.clone());
+                                    ui.close_menu();
+                                }
+                            }
+                            if let Some(p) = selected {
+                                self.load_media_file(&p);
+                            }
+                        }
+                    });
 
                     if ui.button("Import Audio Track (.wav)...").clicked() {
                         if let Some(path) = rfd::FileDialog::new().add_filter("WAV Audio", &["wav"]).pick_file()
@@ -1036,16 +1170,56 @@ impl eframe::App for DitherCraftApp {
                     }
 
                     if ui.button("Save Rendered PNG...").clicked() {
+                        let fname = self.suggested_filename("png");
                         if let Some(ref img) = self.rendered_image
-                            && let Some(path) = rfd::FileDialog::new().add_filter("PNG Image", &["png"]).save_file()
+                            && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("PNG Image", &["png"]).save_file()
                         {
                             let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                            self.status_text = format!("Saved PNG to {}", path.display());
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Save Rendered JPEG...").clicked() {
+                        let fname = self.suggested_filename("jpg");
+                        if let Some(ref img) = self.rendered_image
+                            && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("JPEG Image", &["jpg", "jpeg"]).save_file()
+                        {
+                            let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                            self.status_text = format!("Saved JPEG to {}", path.display());
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Save Rendered WebP...").clicked() {
+                        let fname = self.suggested_filename("webp");
+                        if let Some(ref img) = self.rendered_image
+                            && let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("WebP Image", &["webp"]).save_file()
+                        {
+                            let _ = image::save_buffer(&path, &img.data, img.width, img.height, image::ExtendedColorType::Rgb8);
+                            self.status_text = format!("Saved WebP to {}", path.display());
+                        }
+                        ui.close_menu();
+                    }
+
+                    if let Some(ref track) = self.audio_track
+                        && ui.button("Export Synchronized Audio (.wav)...").clicked()
+                    {
+                        let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() as u32 } else { self.timeline_max_frames };
+                        let audio_bytes = track.export_wav_slice(num_frames, self.target_fps);
+                        let fname = self.suggested_filename("wav");
+                        if let Some(path) = rfd::FileDialog::new().set_file_name(fname).add_filter("WAV Audio", &["wav"]).save_file()
+                            && let Ok(()) = std::fs::write(&path, audio_bytes)
+                        {
+                            self.status_text = format!("Exported synchronized WAV audio to {}", path.display());
                         }
                         ui.close_menu();
                     }
 
                     if ui.button("Export Animated GIF...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("GIF Animation", &["gif"]).save_file() {
+                        if let Some(path) =
+                            rfd::FileDialog::new().set_file_name(self.suggested_filename("gif")).add_filter("GIF Animation", &["gif"]).save_file()
+                        {
                             let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
                             let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
                                 self.source_frames.clone()
@@ -1151,7 +1325,11 @@ impl eframe::App for DitherCraftApp {
                     }
 
                     if ui.button("Export Animated APNG...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("APNG Animation", &["png", "apng"]).save_file() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(self.suggested_filename("png"))
+                            .add_filter("APNG Animation", &["png", "apng"])
+                            .save_file()
+                        {
                             let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
                             let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
                                 self.source_frames.clone()
@@ -1259,11 +1437,123 @@ impl eframe::App for DitherCraftApp {
                         ui.close_menu();
                     }
 
+                    if ui.button("Export Animated WebP...").clicked() {
+                        if let Some(path) =
+                            rfd::FileDialog::new().set_file_name(self.suggested_filename("webp")).add_filter("WebP Animation", &["webp"]).save_file()
+                        {
+                            let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
+                            let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
+                                self.source_frames.clone()
+                            } else if let Some(ref src) = self.source_image {
+                                vec![src.clone(); num_frames]
+                            } else {
+                                Vec::new()
+                            };
+
+                            if !frames_to_render.is_empty() {
+                                let first_frame = &frames_to_render[0];
+                                let mut muxer = WebpAnimationMuxer::new(first_frame.width, first_frame.height);
+                                let delays = self.frame_delays.clone();
+                                let default_delay_ms = 1000 / self.target_fps.max(1);
+
+                                let algo_name = self.selected_algo.clone();
+                                let palette = self.active_palette.clone();
+                                let temporal_noise =
+                                    if self.temporal_noise_enabled { Some((self.temporal_pattern, self.temporal_intensity)) } else { None };
+                                let glow_opt = if self.glow_enabled {
+                                    Some(EpsilonGlow { threshold: self.glow_threshold, radius: self.glow_radius, intensity: self.glow_intensity })
+                                } else {
+                                    None
+                                };
+                                let crt_opt = if self.crt_enabled {
+                                    Some(VintageCrtSimulation {
+                                        scanline_intensity: self.crt_scanline,
+                                        barrel_curvature: self.crt_barrel,
+                                        vignette_intensity: self.crt_vignette,
+                                    })
+                                } else {
+                                    None
+                                };
+                                let blur_opt = if self.blur_enabled { Some(GaussianBlur::new(self.blur_sigma)) } else { None };
+                                let sharpen_opt = if self.sharpen_enabled { Some(Sharpen::new(self.sharpen_amount, 1.0)) } else { None };
+                                let chromatic_opt = if self.chromatic_enabled {
+                                    Some(ChromaticAberration { shift_x: self.chromatic_shift, shift_y: 0, radial: self.chromatic_radial })
+                                } else {
+                                    None
+                                };
+                                let glitch_opt = if self.glitch_enabled {
+                                    Some(JpegGlitchCore { mode: self.glitch_mode, intensity: self.glitch_intensity, block_size: 8, seed: 42 })
+                                } else {
+                                    None
+                                };
+
+                                use rayon::prelude::*;
+                                let rendered: Vec<_> = frames_to_render
+                                    .par_iter()
+                                    .enumerate()
+                                    .map(|(frame_idx, src_buf)| {
+                                        let mut current = (**src_buf).clone();
+                                        if let Some((pattern, intensity)) = temporal_noise {
+                                            current = pattern.apply(&current, frame_idx as u32, intensity).unwrap_or(current);
+                                        }
+                                        let algo = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
+                                        let mut out = algo.apply(&current, &palette).unwrap_or(current);
+                                        if let Some(glow) = &glow_opt {
+                                            out = glow.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(chroma) = &chromatic_opt {
+                                            out = chroma.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(blur) = &blur_opt {
+                                            out = blur.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(sharp) = &sharpen_opt {
+                                            out = sharp.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(crt) = &crt_opt {
+                                            out = crt.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(glitch) = &glitch_opt {
+                                            out = glitch.apply(&out).unwrap_or(out);
+                                        }
+
+                                        let delay_ms = delays.get(frame_idx).copied().unwrap_or(default_delay_ms);
+                                        (out, delay_ms)
+                                    })
+                                    .collect();
+
+                                for (buf, delay_ms) in rendered {
+                                    let mut single_webp = Vec::new();
+                                    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut single_webp);
+                                    if let Ok(()) = encoder.encode(&buf.data, buf.width, buf.height, image::ExtendedColorType::Rgb8)
+                                        && let Some(subchunk) = WebpAnimationMuxer::extract_image_chunk(&single_webp)
+                                    {
+                                        muxer.add_frame(WebpAnimFrame {
+                                            duration_ms: delay_ms,
+                                            x: 0,
+                                            y: 0,
+                                            width: buf.width,
+                                            height: buf.height,
+                                            payload: subchunk.to_vec(),
+                                        });
+                                    }
+                                }
+
+                                if let Ok(anim_bytes) = muxer.build()
+                                    && let Ok(()) = std::fs::write(&path, anim_bytes)
+                                {
+                                    self.status_text = format!("Exported animated WebP ({num_frames} frames)");
+                                }
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
                     if ui.button("Export Black Vector SVG...").clicked() {
-                        let save_target = self
-                            .rendered_image
-                            .as_ref()
-                            .and_then(|img| rfd::FileDialog::new().add_filter("SVG Vector", &["svg"]).save_file().map(|path| (img, path)));
+                        let fname = self.suggested_filename("svg");
+                        let save_target = self.rendered_image.as_ref().and_then(|img| {
+                            rfd::FileDialog::new().set_file_name(&fname).add_filter("SVG Vector", &["svg"]).save_file().map(|path| (img, path))
+                        });
                         if let Some((img, path)) = save_target {
                             let isolator = BlackVectorIsolation::default();
                             if let Ok(svg) = isolator.trace_to_svg(img) {
@@ -1275,10 +1565,10 @@ impl eframe::App for DitherCraftApp {
                     }
 
                     if ui.button("Export Multi-Color SVG...").clicked() {
-                        let save_target = self
-                            .rendered_image
-                            .as_ref()
-                            .and_then(|img| rfd::FileDialog::new().add_filter("Layered SVG", &["svg"]).save_file().map(|path| (img, path)));
+                        let fname = self.suggested_filename("svg");
+                        let save_target = self.rendered_image.as_ref().and_then(|img| {
+                            rfd::FileDialog::new().set_file_name(&fname).add_filter("Layered SVG", &["svg"]).save_file().map(|path| (img, path))
+                        });
                         if let Some((img, path)) = save_target {
                             let separator = MultiColorSvgSeparation::default();
                             if let Ok(svg) = separator.trace_palette_layers(img, &self.active_palette) {
@@ -1290,10 +1580,14 @@ impl eframe::App for DitherCraftApp {
                     }
 
                     if ui.button("Export CNC / Plotter G-Code...").clicked() {
-                        let save_target = self
-                            .rendered_image
-                            .as_ref()
-                            .and_then(|img| rfd::FileDialog::new().add_filter("CNC G-Code", &["gcode", "nc"]).save_file().map(|path| (img, path)));
+                        let fname = self.suggested_filename("gcode");
+                        let save_target = self.rendered_image.as_ref().and_then(|img| {
+                            rfd::FileDialog::new()
+                                .set_file_name(&fname)
+                                .add_filter("CNC G-Code", &["gcode", "nc"])
+                                .save_file()
+                                .map(|path| (img, path))
+                        });
                         if let Some((img, path)) = save_target {
                             let config = GCodeConfig::default();
                             if let Ok(gcode) = GCodeExporter::generate_gcode(img, &config) {
@@ -1305,10 +1599,10 @@ impl eframe::App for DitherCraftApp {
                     }
 
                     if ui.button("Export Smooth Bézier Spline SVG...").clicked() {
-                        let save_target = self
-                            .rendered_image
-                            .as_ref()
-                            .and_then(|img| rfd::FileDialog::new().add_filter("Smooth Bézier SVG", &["svg"]).save_file().map(|path| (img, path)));
+                        let fname = self.suggested_filename("svg");
+                        let save_target = self.rendered_image.as_ref().and_then(|img| {
+                            rfd::FileDialog::new().set_file_name(&fname).add_filter("Smooth Bézier SVG", &["svg"]).save_file().map(|path| (img, path))
+                        });
                         if let Some((img, path)) = save_target
                             && let Ok(svg) = export_smooth_bezier_svg(img, 128, 0.5)
                         {
@@ -1438,6 +1732,13 @@ impl eframe::App for DitherCraftApp {
                     }
                 });
 
+                ui.menu_button("View", |ui| {
+                    ui.checkbox(&mut self.show_telemetry_hud, "Pipeline Telemetry HUD");
+                    ui.checkbox(&mut self.show_pixel_grid, "Pixel Grid (>=800%)");
+                    ui.checkbox(&mut self.split_view_enabled, "Split-View Comparison");
+                    ui.checkbox(&mut self.debounce_mode, "Debounce Slider Preview");
+                });
+
                 ui.menu_button("Help", |ui| {
                     if ui.button("About DitherCraft...").clicked() {
                         self.show_about = true;
@@ -1461,6 +1762,41 @@ impl eframe::App for DitherCraftApp {
                     ui.add_space(8.0);
                     ui.label("Clean-room implementation with zero proprietary assets.");
                     ui.label("Dual-licensed under MIT / Apache-2.0.");
+                });
+            });
+        }
+
+        // Telemetry HUD Window
+        if self.show_telemetry_hud {
+            egui::Window::new("Pipeline Telemetry").resizable(false).open(&mut self.show_telemetry_hud).show(ctx, |ui| {
+                ui.heading("Render Stage Breakdown");
+                ui.label(format!("Algorithm: {}", self.selected_algo));
+                ui.label(format!("Active Gen: #{}", self.render_generation.load(Ordering::Relaxed)));
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("• Kernel Dither:");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.monospace(format!("{:.2} ms", self.telemetry_dither_ms));
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("• Effects Stack:");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.monospace(format!("{:.2} ms", self.telemetry_effects_ms));
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("• Swatch Histogram:");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.monospace(format!("{:.2} ms", self.telemetry_histogram_ms));
+                    });
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.strong("Total Latency:");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.strong(format!("{:.2} ms", self.render_latency_ms));
+                    });
                 });
             });
         }
@@ -1730,7 +2066,13 @@ impl eframe::App for DitherCraftApp {
 
             // Stackable Downstream Effects
             ui.group(|ui| {
-                ui.label("Downstream Effects Stack:");
+                ui.horizontal(|ui| {
+                    ui.label("Downstream Effects Stack:");
+                    if ui.button("🎲 Shuffle").on_hover_text("Randomize retro glitch, CRT, and bloom adjustments").clicked() {
+                        self.shuffle_adjustments();
+                        changed = true;
+                    }
+                });
                 if ui.checkbox(&mut self.glow_enabled, "Epsilon Glow Bloom").changed() {
                     changed = true;
                 }
@@ -2092,9 +2434,10 @@ impl eframe::App for DitherCraftApp {
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status_text);
-                ui.separator();
-                ui.label(format!("Latency: {:.2} ms", self.render_latency_ms));
-                ui.separator();
+                ui.label(format!("Latency: {:.2} ms", self.render_latency_ms)).on_hover_text(format!(
+                    "Pipeline Telemetry:\n• Dither: {:.2} ms\n• Effects: {:.2} ms\n• Histogram: {:.2} ms\n• Total: {:.2} ms",
+                    self.telemetry_dither_ms, self.telemetry_effects_ms, self.telemetry_histogram_ms, self.render_latency_ms
+                ));
                 if self.is_rendering {
                     ui.spinner();
                     ui.label("Rendering on Rayon worker thread...");

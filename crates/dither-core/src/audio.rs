@@ -137,6 +137,55 @@ impl AudioTrack {
 
         AudioSpectrum { bass, mid, treble, rms }
     }
+
+    /// Export the complete audio track as a standard 16-bit PCM RIFF WAV byte buffer.
+    pub fn export_wav(&self) -> Vec<u8> {
+        self.export_samples_wav(&self.samples)
+    }
+
+    /// Export an audio slice synchronized to an animation frame range at a target frame rate.
+    pub fn export_wav_slice(&self, num_frames: u32, target_fps: u32) -> Vec<u8> {
+        if self.samples.is_empty() || self.sample_rate == 0 || target_fps == 0 {
+            return self.export_wav();
+        }
+        let total_samples = (num_frames as usize * self.sample_rate as usize * self.channels as usize) / target_fps as usize;
+        let slice = if total_samples < self.samples.len() { &self.samples[..total_samples] } else { &self.samples[..] };
+        self.export_samples_wav(slice)
+    }
+
+    fn export_samples_wav(&self, samples: &[f32]) -> Vec<u8> {
+        let sample_rate = if self.sample_rate == 0 { 44100 } else { self.sample_rate };
+        let channels = if self.channels == 0 { 1 } else { self.channels };
+        let bits_per_sample = 16u16;
+        let block_align = channels * (bits_per_sample / 8);
+        let byte_rate = sample_rate * block_align as u32;
+        let data_size = (samples.len() * 2) as u32;
+        let riff_size = 36 + data_size;
+
+        let mut out = Vec::with_capacity(44 + data_size as usize);
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&riff_size.to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+        out.extend_from_slice(&channels.to_le_bytes());
+        out.extend_from_slice(&sample_rate.to_le_bytes());
+        out.extend_from_slice(&byte_rate.to_le_bytes());
+        out.extend_from_slice(&block_align.to_le_bytes());
+        out.extend_from_slice(&bits_per_sample.to_le_bytes());
+
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_size.to_le_bytes());
+        for &s in samples {
+            let clamped = s.clamp(-1.0, 1.0);
+            let val = (clamped * 32767.0) as i16;
+            out.extend_from_slice(&val.to_le_bytes());
+        }
+
+        out
+    }
 }
 
 #[cfg(test)]
@@ -176,5 +225,17 @@ mod tests {
 
         let spectrum = track.get_frame_spectrum(0, 30);
         assert!(spectrum.rms > 0.0);
+
+        // Test export roundtrip
+        let exported = track.export_wav();
+        assert_eq!(exported.len(), 44 + 32);
+        let track2 = AudioTrack::parse_wav(&exported).expect("parse exported wav");
+        assert_eq!(track2.sample_rate, track.sample_rate);
+        assert_eq!(track2.channels, track.channels);
+        assert_eq!(track2.samples.len(), track.samples.len());
+
+        // Test slice export
+        let sliced = track.export_wav_slice(1, 30);
+        assert!(!sliced.is_empty());
     }
 }
