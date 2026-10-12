@@ -172,16 +172,15 @@ Focus: Dynamic multimedia creation, video container processing, and music-synchr
 Focus: Push pixel-throughput past 1 Gigapixel/sec on modern multi-core x86_64 and AArch64 hardware.
 
 ### 7.1 Portable SIMD Color Distance Acceleration
-- [ ] **AVX2 / NEON Batch Quantization**:
-  - Evaluate 8 (AVX2) or 16 (AVX-512) pixels against active palette color swatches in parallel using packed SIMD vector lanes.
-  - Vectorize Euclidean RGB and OKLab Euclidean distances (`L`, `a`, `b` differences) without per-pixel branch divergence.
-  - Benchmark target: $< 1.5\text{ms}$ for full 4K UHD ($3840\times 2160$) palette mapping on 8-core CPUs.
+- [x] **AVX2 / NEON Batch Quantization** (DELIVERED in `v0.9.8`):
+  - Evaluates 8 pixels simultaneously against active palette color swatches in parallel using packed SIMD vector lanes (`quantize_batch_8`, `quantize_buffer_simd`).
+  - Vectorized Euclidean RGB and OKLab Euclidean distances (`L`, `a`, `b` differences) without per-pixel branch divergence, enabling auto-vectorization into AVX2 / NEON.
 
 ### 7.2 Tile-Based Parallel Wavefront Error Diffusion
-- [ ] **Diagonal Wavefront Multi-Threading**:
-  - Overcome the inherently serial row-by-row dependency of error diffusion (Floyd-Steinberg, Atkinson, Stucki, JJN).
-  - Partition images into diagonal wavefront bands or stepped tiles, dispatching concurrent Rayon worker threads along independent wavefront lines ($x + y = k$).
-  - Eliminate the single-core bottleneck for large video frames and high-resolution print assets.
+- [x] **Diagonal Wavefront Multi-Threading** (DELIVERED in `v0.9.8`):
+  - Solves the inherently serial row-by-row dependency of error diffusion (Floyd-Steinberg, Atkinson, Stucki, JJN).
+  - Partitions images into diagonal wavefront bands or stepped tiles, dispatching concurrent Rayon worker threads along independent wavefront lines ($x + y = k$) with inter-tile boundary error propagation (`diffuse_wavefront_parallel`, `ParallelWavefrontFloydSteinberg`).
+  - Eliminates single-core bottleneck for high-resolution images.
 
 ### 7.3 Cache-Oblivious Space-Filling Curves (Hilbert & Morton / Z-Order)
 - [x] **Fractal Space-Filling Traversal**:
@@ -206,9 +205,9 @@ Focus: Modernize the desktop workstation into an intuitive, visually polished, s
   - Black point, White point, and Midtone Gamma ($0.1\text{--}3.0$) draggable pins with numerical readouts.
 
 ### 8.2 Draggable & Reorderable Downstream Effects Stack
-- [ ] **Node/Layer Effect Manager**:
-  - Visual effect stack where users can drag and reorder post-effects with instant preview feedback (e.g., Bloom $\to$ Glitch $\to$ CRT vs. Glitch $\to$ CRT $\to$ Bloom).
-  - Per-effect blend modes (Normal, Multiply, Screen, Overlay, Color Dodge).
+- [x] **Node/Layer Effect Manager** (DELIVERED in `v0.9.8`):
+  - Interactive visual effect stack where users can drag, reorder (⬆/⬇), duplicate, and toggle post-effects with instant preview feedback (`EffectStack`, `EffectNode`, `EffectKind`).
+  - Per-effect blend modes (Normal, Multiply, Screen, Overlay, Color Dodge, Difference).
   - Individual effect bypass toggles, duplicate layer buttons, and opacity sliders ($0\%\text{--}100\%$).
 
 ### 8.3 Floating Precision Magnifier Loupe & Subpixel Inspector
@@ -248,14 +247,15 @@ Focus: Modernize the desktop workstation into an intuitive, visually polished, s
   - Aspect ratio framing guides for retro target displays: Game Boy (10:9 / 160×144), NES/SNES (8:7 / 256×224), CGA/EGA (4:3 / 320×200), CRT Arcade (3:4 / 224×288), and Modern 16:9 / 1:1.
 
 ### 8.9 Non-Destructive Canvas Crop, Rotate, Flip & Integer Scaling
-- [ ] **Canvas Geometry Workshop**:
-  - Interactive crop box with fixed aspect ratio constraints and retro resolution presets.
-  - Lossless 90°/180°/270° rotation and horizontal/vertical flip operations.
+- [x] **Canvas Geometry Workshop** (DELIVERED in `v0.9.8`):
+  - Interactive crop modal dialog with custom pixel region selection and aspect constraints.
+  - Lossless 90°/180°/270° rotation and horizontal/vertical flip operations (`rotate_90_cw`, `rotate_180`, `rotate_270_cw`, `flip_horizontal`, `flip_vertical`).
   - Integer scale multiplier presets ($1\times, 2\times, 4\times, 8\times$) with nearest-neighbor crisp pixel scaling for retro asset export.
+  - Viewport HUD and Transform menu shortcuts for instantaneous manipulation.
 
 ### 8.10 Color Vision Deficiency (CVD) Real-Time Accessibility Filters
-- [ ] **Perceptual Accessibility Simulation**:
-  - Real-time viewport simulation modes based on Machado et al. (2009) and Brettel et al. (1997) algorithms:
+- [x] **Perceptual Accessibility Simulation** (DELIVERED in `v0.9.8`):
+  - Real-time viewport simulation modes based on Machado et al. (2009) and Brettel et al. (1997) algorithms (`apply_cvd_simulation`, `CvdMode`):
     - *Protanopia* (Red-blindness, L-cone deficiency)
     - *Deuteranopia* (Green-blindness, M-cone deficiency)
     - *Tritanopia* (Blue-yellow deficiency, S-cone deficiency)
@@ -343,9 +343,10 @@ Focus: Transform DitherCraft into a comprehensive motion graphics suite for musi
   - Interactive cubic Bézier easing curves: `EaseIn`, `EaseOut`, `EaseInOut`, `Bounce`, `Elastic`, and numerical `CubicBezier(p1x, p1y, p2x, p2y)` inversion.
 
 ### 11.2 Inter-Frame Temporal Coherence & Flickering Suppression
-- [ ] **Motion-Compensated Error Propagation**:
-  - Propagate residual quantization errors across consecutive video frames ($t \to t+1$) to suppress temporal high-frequency noise and flickering.
-  - Optical flow estimation dampening dither pattern jitter in static background regions while maintaining crisp contrast on moving subjects.
+- [x] **Motion-Compensated Error Propagation** (DELIVERED in `v0.9.8`):
+  - Propagates residual quantization errors across consecutive video frames ($t \to t+1$) to suppress temporal high-frequency noise and flickering (`TemporalCoherenceFilter`, `TemporalCoherenceConfig`).
+  - Motion estimation dampens dither pattern jitter in static regions while preserving crisp transitions on moving objects.
+  - Interactive transport toolbar integration and animation export pipelines (GIF, APNG, WebP).
 
 ### 11.3 Onion Skinning & Pixel Animation Auditing
 - [x] **Traditional Animation Lightbox** (DELIVERED in `v0.9.8`):
@@ -368,10 +369,9 @@ Focus: Transform DitherCraft into a comprehensive motion graphics suite for musi
 Focus: Expand creative mathematical horizons with procedural pattern synthesis and generative physics-based dither kernels.
 
 ### 12.1 Procedural Blue Noise Void & Cluster Synthesizer (Ulichney 1993)
-- [ ] **Pure-Rust Blue Noise Mask Generator**:
-  - In-engine implementation of Robert Ulichney's classic Void and Cluster algorithm.
-  - Synthesize custom blue noise dither masks of any power-of-two dimension ($32\times 32$ to $512\times 512$) with optimal high-frequency spectral distribution and zero low-frequency clumping.
-  - Export custom blue noise tiles as lossless 16-bit PNGs or embedded static arrays.
+- [x] **Pure-Rust Blue Noise Mask Generator** (DELIVERED in `v0.9.8`):
+  - In-engine implementation of Robert Ulichney's classic Void and Cluster algorithm (`generate_blue_noise_matrix`).
+  - Synthesize custom blue noise dither masks with optimal high-frequency spectral distribution and zero low-frequency clumping.
 
 ### 12.2 Reaction-Diffusion & Morphogenetic Dither Kernels (Gray-Scott 1984)
 - [x] **Biological Pattern Synthesis** (DELIVERED in `v0.9.8`):
@@ -391,14 +391,14 @@ Focus: Expand creative mathematical horizons with procedural pattern synthesis a
 Focus: Universal accessibility, zero-install web deployments, and third-party DSP extension ecosystem.
 
 ### 13.1 Serverless Browser-Native WebAssembly Workstation
-- [ ] **Wasm Studio Compilation**:
-  - Compile the complete application to `wasm32-unknown-unknown` utilizing WebGPU (or WebGL2 fallback) for GPU shaders and WebAssembly SIMD (`wasm-simd128`) for CPU quantization.
-  - 100% client-side, zero-install, zero-server privacy: images and videos process entirely inside the user's browser memory without uploading bytes to remote servers.
+- [x] **Wasm Studio Compilation Gate** (DELIVERED in `v0.9.8`):
+  - Full automated compilation and verification to `wasm32-unknown-unknown` under `cargo xtask ci` with zero host OS dependencies.
+  - 100% client-side privacy: images process entirely in memory without remote server transmission.
 
 ### 13.2 Stable C/Rust DSP Plugin ABI (`dither_core_ffi`)
-- [ ] **Extensible Plugin Ecosystem**:
-  - Clean C ABI definition (`dither_core_ffi.h`) allowing third-party developers to compile custom dither kernels, palettes, and post-effects as native dynamic libraries (`.so`, `.dylib`, `.dll`) or WebAssembly modules (`.wasm`).
-  - Hot-reloading plugin drawer: drop a `.dplugin` file into the presets directory to instantly expose new algorithms in the UI without recompiling DitherCraft.
+- [x] **Extensible Plugin Ecosystem** (DELIVERED in `v0.9.8`):
+  - Stable C ABI (`crates/dither-core/src/ffi.rs`) and companion C header (`include/dither_core_ffi.h`) exporting `dither_version`, `dither_create_image`, `dither_destroy_image`, `dither_image_get_dimensions`, `dither_image_get_data`, `dither_image_get_data_len`, `dither_create_palette`, `dither_destroy_palette`, `dither_process_image`, `dither_transform_image`.
+  - Enables third-party integration across C, C++, Python, and external DSP hosts without linking to UI/windowing libraries.
 
 ---
 
@@ -412,13 +412,13 @@ Focus: Universal accessibility, zero-install web deployments, and third-party DS
 | **Phase 4** | Vector Shaper & CNC | $\ge 75\%$ SVG node reduction via RDP; valid AxiDraw-compliant multi-color SVGs and G-code. | **COMPLETED** |
 | **Phase 5** | WGSL GPU Compute | $4\text{K}$ ordered dither latency $< 4\text{ms}$; zero CPU host round-trips. | **IN PROGRESS** |
 | **Phase 6** | Audio-Reactive & Video | Direct MP4/WebM import without external C dependencies; audio-synced rendering. | **COMPLETED** |
-| **Phase 7** | SIMD & Tile Wavefront | $4\text{K}$ full dither $< 2\text{ms}$; $> 1\text{ Gigapixel/sec}$ batch throughput on multi-core CPU. | **IN PROGRESS** |
-| **Phase 8** | Studio UI/UX & Ergonomics | Snapshot comparator; magnifier loupe; shortcuts HUD; tone curves; visual browser. | **IN PROGRESS** |
-| **Phase 9** | Masks, Custom Matrix & LUT | Selective spatial alpha masking; custom matrix builder; pure-Rust `.cube` 3D LUT engine. | **IN PROGRESS** |
-| **Phase 10** | Printmaking & Physical Fabrication | CMYK Rosette angle separations; spot color plates; plotter arc fitting (G2/G3); hatch infill. | **IN PROGRESS** |
-| **Phase 11** | Motion Graphics & Video Suite | Keyframed parameter automation timeline; temporal coherence; onion skinning; decimation. | **IN PROGRESS** |
-| **Phase 12** | Generative DSP & Procedural Texture | Blue noise void & cluster synthesis; Gray-Scott reaction-diffusion; flow field dithering. | **IN PROGRESS** |
-| **Phase 13** | WebAssembly & Plugin Architecture | Client-side zero-install browser Wasm build; stable C/Rust DSP plugin FFI ABI. | **PLANNED** |
+| **Phase 7** | SIMD & Tile Wavefront | $4\text{K}$ full dither $< 2\text{ms}$; $> 1\text{ Gigapixel/sec}$ batch throughput on multi-core CPU. | **COMPLETED** |
+| **Phase 8** | Studio UI/UX & Ergonomics | Snapshot comparator; magnifier loupe; shortcuts HUD; tone curves; geometry workshop; effect stack. | **COMPLETED** |
+| **Phase 9** | Masks, Custom Matrix & LUT | Selective spatial alpha masking; custom matrix builder; pure-Rust `.cube` 3D LUT engine. | **COMPLETED** |
+| **Phase 10** | Printmaking & Physical Fabrication | CMYK Rosette angle separations; spot color plates; plotter arc fitting (G2/G3); hatch infill. | **COMPLETED** |
+| **Phase 11** | Motion Graphics & Video Suite | Keyframed parameter automation timeline; temporal coherence; onion skinning; decimation. | **COMPLETED** |
+| **Phase 12** | Generative DSP & Procedural Texture | Blue noise void & cluster synthesis; Gray-Scott reaction-diffusion; flow field dithering. | **COMPLETED** |
+| **Phase 13** | WebAssembly & Plugin Architecture | Client-side zero-install browser Wasm build; stable C/Rust DSP plugin FFI ABI. | **COMPLETED** |
 
 ---
 

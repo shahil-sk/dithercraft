@@ -674,6 +674,115 @@ pub fn render_onion_skin<B: std::borrow::Borrow<ImageBuffer>>(
     Ok(out)
 }
 
+/// Configuration for inter-frame temporal coherence and flicker suppression.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TemporalCoherenceConfig {
+    /// Residual error damping factor (0.0 = no temporal blending, 1.0 = maximum flicker suppression).
+    pub damping: f32,
+    /// Normalized motion threshold below which pixels are treated as static/quasi-static (0.0 to 1.0).
+    pub motion_threshold: f32,
+}
+
+impl Default for TemporalCoherenceConfig {
+    fn default() -> Self {
+        Self { damping: 0.65, motion_threshold: 0.06 }
+    }
+}
+
+/// Temporal coherence filter for video frames and animations.
+///
+/// Dampens high-frequency dither flicker on static backgrounds while maintaining crispness
+/// and instant responsiveness on moving subjects without ghosting or smear.
+#[derive(Debug, Clone, Default)]
+pub struct TemporalCoherenceFilter {
+    pub config: TemporalCoherenceConfig,
+}
+
+impl TemporalCoherenceFilter {
+    pub fn new(config: TemporalCoherenceConfig) -> Self {
+        Self { config }
+    }
+
+    /// Blend current frame with previous frame based on local motion detection.
+    pub fn apply(
+        &self,
+        prev_source: &ImageBuffer,
+        curr_source: &ImageBuffer,
+        prev_output: &ImageBuffer,
+        curr_output: &ImageBuffer,
+    ) -> Result<ImageBuffer, DitherError> {
+        if curr_source.width != prev_source.width
+            || curr_source.height != prev_source.height
+            || curr_output.width != curr_source.width
+            || curr_output.height != curr_source.height
+            || prev_output.width != prev_source.width
+            || prev_output.height != prev_source.height
+        {
+            return Err(DitherError::InvalidParameter("Frame dimensions must match for temporal coherence".into()));
+        }
+
+        let width = curr_source.width as usize;
+        let _height = curr_source.height as usize;
+        let mut out = ImageBuffer::new(curr_source.width, curr_source.height)?;
+
+        let damping = self.config.damping.clamp(0.0, 1.0);
+        let threshold = self.config.motion_threshold.clamp(0.001, 1.0);
+
+        out.data.par_chunks_exact_mut(width * 3).enumerate().for_each(|(y, row_out)| {
+            let row_offset = y * width * 3;
+            let prev_src_row = &prev_source.data[row_offset..row_offset + width * 3];
+            let curr_src_row = &curr_source.data[row_offset..row_offset + width * 3];
+            let prev_out_row = &prev_output.data[row_offset..row_offset + width * 3];
+            let curr_out_row = &curr_output.data[row_offset..row_offset + width * 3];
+
+            for x in 0..width {
+                let idx = x * 3;
+                let dr = (curr_src_row[idx] as i32 - prev_src_row[idx] as i32).abs();
+                let dg = (curr_src_row[idx + 1] as i32 - prev_src_row[idx + 1] as i32).abs();
+                let db = (curr_src_row[idx + 2] as i32 - prev_src_row[idx + 2] as i32).abs();
+                let motion = (dr + dg + db) as f32 / (3.0 * 255.0);
+
+                if motion < threshold {
+                    let factor = damping * (1.0 - motion / threshold);
+                    let one_minus = 1.0 - factor;
+
+                    row_out[idx] = ((curr_out_row[idx] as f32 * one_minus) + (prev_out_row[idx] as f32 * factor)).round().clamp(0.0, 255.0) as u8;
+                    row_out[idx + 1] =
+                        ((curr_out_row[idx + 1] as f32 * one_minus) + (prev_out_row[idx + 1] as f32 * factor)).round().clamp(0.0, 255.0) as u8;
+                    row_out[idx + 2] =
+                        ((curr_out_row[idx + 2] as f32 * one_minus) + (prev_out_row[idx + 2] as f32 * factor)).round().clamp(0.0, 255.0) as u8;
+                } else {
+                    row_out[idx] = curr_out_row[idx];
+                    row_out[idx + 1] = curr_out_row[idx + 1];
+                    row_out[idx + 2] = curr_out_row[idx + 2];
+                }
+            }
+        });
+
+        Ok(out)
+    }
+
+    /// Apply temporal coherence sequentially across a list of frames.
+    pub fn apply_sequence(&self, source_frames: &[ImageBuffer], dithered_frames: &[ImageBuffer]) -> Result<Vec<ImageBuffer>, DitherError> {
+        if source_frames.is_empty() || dithered_frames.is_empty() {
+            return Ok(Vec::new());
+        }
+        if source_frames.len() != dithered_frames.len() {
+            return Err(DitherError::InvalidParameter("Source and dithered frame counts must match".into()));
+        }
+
+        let mut out_frames = Vec::with_capacity(dithered_frames.len());
+        out_frames.push(dithered_frames[0].clone());
+
+        for i in 1..dithered_frames.len() {
+            let filtered = self.apply(&source_frames[i - 1], &source_frames[i], &out_frames[i - 1], &dithered_frames[i])?;
+            out_frames.push(filtered);
+        }
+
+        Ok(out_frames)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,5 +860,48 @@ mod tests {
         assert_eq!(track.eval(0), 0.0);
         assert_eq!(track.eval(10), 100.0);
         assert_eq!(track.eval(5), 50.0);
+    }
+
+    #[test]
+    fn test_temporal_coherence_filter() {
+        // Create 2 identical source frames (static scene)
+        let mut s0 = ImageBuffer::new(2, 2).expect("s0");
+        let mut s1 = ImageBuffer::new(2, 2).expect("s1");
+        for y in 0..2 {
+            for x in 0..2 {
+                s0.set_pixel(x, y, RgbColor::new(128, 128, 128));
+                s1.set_pixel(x, y, RgbColor::new(128, 128, 128));
+            }
+        }
+
+        // Two dither outputs with high-frequency dither flicker
+        let mut o0 = ImageBuffer::new(2, 2).expect("o0");
+        let mut o1 = ImageBuffer::new(2, 2).expect("o1");
+        o0.set_pixel(0, 0, RgbColor::new(0, 0, 0));
+        o0.set_pixel(1, 0, RgbColor::new(255, 255, 255));
+        o1.set_pixel(0, 0, RgbColor::new(255, 255, 255)); // flickered
+        o1.set_pixel(1, 0, RgbColor::new(0, 0, 0)); // flickered
+
+        let filter = TemporalCoherenceFilter::new(TemporalCoherenceConfig { damping: 0.8, motion_threshold: 0.1 });
+
+        let stabilized = filter.apply(&s0, &s1, &o0, &o1).expect("stabilized");
+        // Because source was identical (motion = 0), damping = 0.8 blends heavily toward previous output
+        let p00 = stabilized.get_pixel(0, 0).expect("px");
+        // curr was 255, prev was 0. With 0.8 blend towards prev: 255 * 0.2 + 0 * 0.8 = 51
+        assert!(p00.r < 100);
+
+        // Now test moving subject (pixel (1, 1) has high source motion)
+        s1.set_pixel(1, 1, RgbColor::new(255, 255, 255));
+        s0.set_pixel(1, 1, RgbColor::new(0, 0, 0));
+        o1.set_pixel(1, 1, RgbColor::new(200, 200, 200));
+        o0.set_pixel(1, 1, RgbColor::new(10, 10, 10));
+
+        let motion_out = filter.apply(&s0, &s1, &o0, &o1).expect("motion");
+        // Because motion exceeds threshold (255 delta), current output is retained without blending
+        assert_eq!(motion_out.get_pixel(1, 1).expect("px").r, 200);
+
+        // Test apply_sequence
+        let seq = filter.apply_sequence(&[s0.clone(), s1.clone()], &[o0.clone(), o1.clone()]).expect("seq");
+        assert_eq!(seq.len(), 2);
     }
 }

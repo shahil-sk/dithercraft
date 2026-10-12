@@ -2,9 +2,10 @@ use crate::buffer::ImageBuffer;
 use crate::color::RgbColor;
 use crate::error::DitherError;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Vintage CRT Simulation with scanlines, phosphor glow, barrel curvature, and vignette.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VintageCrtSimulation {
     pub scanline_intensity: f32, // 0.0 to 1.0 (default 0.25)
     pub barrel_curvature: f32,   // 0.0 to 0.5 (default 0.08)

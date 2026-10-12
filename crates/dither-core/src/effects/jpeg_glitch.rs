@@ -13,7 +13,7 @@ pub enum JpegSubMode {
 }
 
 /// JPEG Glitch Core: Authentic discrete cosine transform & byte-stream compression corruption.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JpegGlitchCore {
     pub mode: JpegSubMode,
     pub intensity: f32,    // 0.0 to 1.0

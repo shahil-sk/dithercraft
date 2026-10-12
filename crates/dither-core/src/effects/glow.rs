@@ -1,9 +1,10 @@
 use crate::buffer::ImageBuffer;
 use crate::color::RgbColor;
 use crate::error::DitherError;
+use serde::{Deserialize, Serialize};
 
 /// Epsilon Glow: Diffusion bloom filter extracting highlights and convolving luminous halos.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EpsilonGlow {
     pub threshold: u8,  // Highlight threshold (e.g. 180)
     pub radius: usize,  // Blur radius in pixels (e.g. 4)

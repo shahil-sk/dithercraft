@@ -8,7 +8,7 @@ use dither_core::{
     color::{ColorHarmony, CvdMode, RgbColor},
     effects::*,
     palette::{ColorMetric, Palette, Swatch},
-    temporal::{TemporalNoisePattern, render_onion_skin},
+    temporal::{TemporalCoherenceConfig, TemporalCoherenceFilter, TemporalNoisePattern, render_onion_skin},
     vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, SpotColorPlateSeparation, export_smooth_bezier_svg},
 };
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
@@ -551,6 +551,23 @@ pub struct DitherCraftApp {
     rd_steps: usize,
     flow_scale: f32,
     flow_swirl: f32,
+
+    // Phase 8.9: Canvas Geometry Workshop
+    crop_dialog_open: bool,
+    crop_x: u32,
+    crop_y: u32,
+    crop_width: u32,
+    crop_height: u32,
+
+    // Phase 11.2: Inter-Frame Temporal Coherence
+    temporal_coherence_enabled: bool,
+    temporal_coherence_damping: f32,
+    temporal_coherence_threshold: f32,
+    last_rendered_source: Option<ImageBuffer>,
+    last_rendered_output: Option<ImageBuffer>,
+
+    // Phase 8.2: Draggable & Reorderable Downstream Effects Stack
+    effect_stack: EffectStack,
 }
 
 impl DitherCraftApp {
@@ -714,6 +731,20 @@ impl DitherCraftApp {
             rd_steps: 60,
             flow_scale: 0.04,
             flow_swirl: 1.5,
+
+            crop_dialog_open: false,
+            crop_x: 0,
+            crop_y: 0,
+            crop_width: 256,
+            crop_height: 256,
+
+            temporal_coherence_enabled: false,
+            temporal_coherence_damping: 0.65,
+            temporal_coherence_threshold: 0.06,
+            last_rendered_source: None,
+            last_rendered_output: None,
+
+            effect_stack: EffectStack::default_stack(),
         }
     }
 
@@ -749,6 +780,104 @@ impl DitherCraftApp {
         self.tonal_cycle_step = (next_f32() * 6.0) as usize;
         self.status_text = "🎲 Shuffled effect adjustments".into();
         self.trigger_render();
+    }
+
+    fn transform_rotate_90_cw(&mut self) {
+        if let Some(src) = &self.source_image
+            && let Ok(rotated) = src.rotate_90_cw()
+        {
+            self.record_undo_state();
+            self.source_image = Some(Arc::new(rotated));
+            if !self.source_frames.is_empty() {
+                self.source_frames = self.source_frames.iter().filter_map(|f| f.rotate_90_cw().ok().map(Arc::new)).collect();
+            }
+            self.status_text = "Rotated canvas 90° clockwise".into();
+            self.trigger_render();
+        }
+    }
+
+    fn transform_rotate_180(&mut self) {
+        if let Some(src) = &self.source_image
+            && let Ok(rotated) = src.rotate_180()
+        {
+            self.record_undo_state();
+            self.source_image = Some(Arc::new(rotated));
+            if !self.source_frames.is_empty() {
+                self.source_frames = self.source_frames.iter().filter_map(|f| f.rotate_180().ok().map(Arc::new)).collect();
+            }
+            self.status_text = "Rotated canvas 180°".into();
+            self.trigger_render();
+        }
+    }
+
+    fn transform_rotate_270_cw(&mut self) {
+        if let Some(src) = &self.source_image
+            && let Ok(rotated) = src.rotate_270_cw()
+        {
+            self.record_undo_state();
+            self.source_image = Some(Arc::new(rotated));
+            if !self.source_frames.is_empty() {
+                self.source_frames = self.source_frames.iter().filter_map(|f| f.rotate_270_cw().ok().map(Arc::new)).collect();
+            }
+            self.status_text = "Rotated canvas 90° counter-clockwise".into();
+            self.trigger_render();
+        }
+    }
+
+    fn transform_flip_horizontal(&mut self) {
+        if let Some(src) = &self.source_image
+            && let Ok(flipped) = src.flip_horizontal()
+        {
+            self.record_undo_state();
+            self.source_image = Some(Arc::new(flipped));
+            if !self.source_frames.is_empty() {
+                self.source_frames = self.source_frames.iter().filter_map(|f| f.flip_horizontal().ok().map(Arc::new)).collect();
+            }
+            self.status_text = "Flipped canvas horizontally".into();
+            self.trigger_render();
+        }
+    }
+
+    fn transform_flip_vertical(&mut self) {
+        if let Some(src) = &self.source_image
+            && let Ok(flipped) = src.flip_vertical()
+        {
+            self.record_undo_state();
+            self.source_image = Some(Arc::new(flipped));
+            if !self.source_frames.is_empty() {
+                self.source_frames = self.source_frames.iter().filter_map(|f| f.flip_vertical().ok().map(Arc::new)).collect();
+            }
+            self.status_text = "Flipped canvas vertically".into();
+            self.trigger_render();
+        }
+    }
+
+    fn transform_scale_integer(&mut self, factor: u32) {
+        if let Some(src) = &self.source_image
+            && let Ok(scaled) = src.scale_integer(factor)
+        {
+            self.record_undo_state();
+            self.source_image = Some(Arc::new(scaled));
+            if !self.source_frames.is_empty() {
+                self.source_frames = self.source_frames.iter().filter_map(|f| f.scale_integer(factor).ok().map(Arc::new)).collect();
+            }
+            self.status_text = format!("Scaled canvas {factor}x (nearest neighbor)");
+            self.trigger_render();
+        }
+    }
+
+    fn transform_crop(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        if let Some(src) = &self.source_image
+            && let Ok(cropped) = src.crop(x, y, w, h)
+        {
+            self.record_undo_state();
+            self.source_image = Some(Arc::new(cropped));
+            if !self.source_frames.is_empty() {
+                self.source_frames = self.source_frames.iter().filter_map(|f| f.crop(x, y, w, h).ok().map(Arc::new)).collect();
+            }
+            self.status_text = format!("Cropped canvas to {w}x{h}");
+            self.trigger_render();
+        }
     }
 
     fn load_media_file(&mut self, path: &Path) {
@@ -1098,33 +1227,42 @@ impl DitherCraftApp {
 
         let palette = self.active_palette.cycle_tonal(tonal_step);
 
-        let glow_opt = if self.glow_enabled {
-            Some(EpsilonGlow { threshold: self.glow_threshold, radius: self.glow_radius, intensity: self.glow_intensity })
-        } else {
-            None
-        };
-
-        let chromatic_opt = if self.chromatic_enabled {
-            Some(ChromaticAberration { shift_x: chromatic_shift, shift_y: 0, radial: self.chromatic_radial })
-        } else {
-            None
-        };
-
-        let glitch_opt = if self.glitch_enabled {
-            Some(JpegGlitchCore { mode: self.glitch_mode, intensity: glitch_intensity, block_size: 8, seed: 42 })
-        } else {
-            None
-        };
-
-        let crt_opt = if self.crt_enabled {
-            Some(VintageCrtSimulation { scanline_intensity: crt_scanline, barrel_curvature: self.crt_barrel, vignette_intensity: self.crt_vignette })
-        } else {
-            None
-        };
-
-        let blur_opt = if self.blur_enabled { Some(GaussianBlur::new(self.blur_sigma)) } else { None };
-
-        let sharpen_opt = if self.sharpen_enabled { Some(Sharpen::new(self.sharpen_amount, 1.0)) } else { None };
+        let mut effect_stack = self.effect_stack.clone();
+        for node in &mut effect_stack.nodes {
+            match &mut node.kind {
+                EffectKind::Glow(glow) => {
+                    node.enabled = self.glow_enabled;
+                    glow.threshold = self.glow_threshold;
+                    glow.radius = self.glow_radius;
+                    glow.intensity = self.glow_intensity;
+                }
+                EffectKind::Chromatic(chroma) => {
+                    node.enabled = self.chromatic_enabled;
+                    chroma.shift_x = chromatic_shift;
+                    chroma.radial = self.chromatic_radial;
+                }
+                EffectKind::Glitch(glitch) => {
+                    node.enabled = self.glitch_enabled;
+                    glitch.mode = self.glitch_mode;
+                    glitch.intensity = glitch_intensity;
+                }
+                EffectKind::Crt(crt) => {
+                    node.enabled = self.crt_enabled;
+                    crt.scanline_intensity = crt_scanline;
+                    crt.barrel_curvature = self.crt_barrel;
+                    crt.vignette_intensity = self.crt_vignette;
+                }
+                EffectKind::Blur(blur) => {
+                    node.enabled = self.blur_enabled;
+                    blur.sigma = self.blur_sigma;
+                }
+                EffectKind::Sharpen(sharpen) => {
+                    node.enabled = self.sharpen_enabled;
+                    sharpen.amount = self.sharpen_amount;
+                }
+                _ => {}
+            }
+        }
 
         let temporal_opt =
             if self.temporal_noise_enabled { Some((self.temporal_pattern, self.frame_counter, self.temporal_intensity)) } else { None };
@@ -1141,6 +1279,17 @@ impl DitherCraftApp {
                     _ => Cube3dLut::technicolor_2strip(32),
                 })
             }
+        } else {
+            None
+        };
+
+        let temporal_coherence = if self.temporal_coherence_enabled {
+            Some((
+                self.temporal_coherence_damping,
+                self.temporal_coherence_threshold,
+                self.last_rendered_source.clone(),
+                self.last_rendered_output.clone(),
+            ))
         } else {
             None
         };
@@ -1213,31 +1362,15 @@ impl DitherCraftApp {
             }
 
             let t_fx = Instant::now();
-            // Post-effects stack
-            if let Some(glow) = glow_opt {
-                out = glow.apply(&out).unwrap_or(out);
-            }
-            if cancel_token.load(Ordering::Relaxed) != gen_id {
-                return;
-            }
+            // Downstream Effect Stack
+            out = effect_stack.apply(&out).unwrap_or(out);
 
-            if let Some(chromatic) = chromatic_opt {
-                out = chromatic.apply(&out).unwrap_or(out);
-            }
-            if let Some(glitch) = glitch_opt {
-                out = glitch.apply(&out).unwrap_or(out);
-            }
-            if let Some(crt) = crt_opt {
-                out = crt.apply(&out).unwrap_or(out);
-            }
-            if let Some(blur) = blur_opt {
-                out = blur.apply(&out).unwrap_or(out);
-            }
-            if let Some(sharpen) = sharpen_opt {
-                out = sharpen.apply(&out).unwrap_or(out);
-            }
             if let Some((pattern, frame, intensity)) = temporal_opt {
                 out = pattern.apply(&out, frame, intensity).unwrap_or(out);
+            }
+            if let Some((damp, thresh, Some(ref prev_s), Some(ref prev_o))) = temporal_coherence {
+                let filter = TemporalCoherenceFilter::new(TemporalCoherenceConfig { damping: damp, motion_threshold: thresh });
+                out = filter.apply(prev_s, &input_buf, prev_o, &out).unwrap_or(out);
             }
             if cvd_mode != CvdMode::Normal {
                 out.apply_cvd_simulation(cvd_mode);
@@ -1371,6 +1504,10 @@ impl eframe::App for DitherCraftApp {
                 if total_px > 0.0 {
                     self.swatch_percentages = result.swatch_counts.iter().map(|&cnt| (cnt as f32 / total_px) * 100.0).collect();
                 }
+                if let Some(src) = &self.source_image {
+                    self.last_rendered_source = Some((**src).clone());
+                }
+                self.last_rendered_output = Some(result.buffer.clone());
                 self.rendered_image = Some(result.buffer);
                 self.render_latency_ms = result.duration_ms;
                 self.telemetry_dither_ms = result.dither_ms;
@@ -1580,7 +1717,7 @@ impl eframe::App for DitherCraftApp {
                                 };
 
                                 use rayon::prelude::*;
-                                let rendered: Vec<_> = frames_to_render
+                                let mut rendered: Vec<_> = frames_to_render
                                     .par_iter()
                                     .enumerate()
                                     .map(|(frame_idx, src_buf)| {
@@ -1613,6 +1750,22 @@ impl eframe::App for DitherCraftApp {
                                         (out, delay_ms)
                                     })
                                     .collect();
+
+                                if self.temporal_coherence_enabled {
+                                    let raw_sources: Vec<ImageBuffer> = frames_to_render.iter().map(|b| (**b).clone()).collect();
+                                    let dithered: Vec<ImageBuffer> = rendered.iter().map(|(b, _)| b.clone()).collect();
+                                    let filter = TemporalCoherenceFilter::new(TemporalCoherenceConfig {
+                                        damping: self.temporal_coherence_damping,
+                                        motion_threshold: self.temporal_coherence_threshold,
+                                    });
+                                    if let Ok(filtered) = filter.apply_sequence(&raw_sources, &dithered) {
+                                        for (i, f) in filtered.into_iter().enumerate() {
+                                            if i < rendered.len() {
+                                                rendered[i].0 = f;
+                                            }
+                                        }
+                                    }
+                                }
 
                                 for (buf, delay_ms) in rendered {
                                     let mut rgba_raw = Vec::with_capacity((buf.width * buf.height * 4) as usize);
@@ -1688,7 +1841,7 @@ impl eframe::App for DitherCraftApp {
                                 };
 
                                 use rayon::prelude::*;
-                                let rendered: Vec<_> = frames_to_render
+                                let mut rendered: Vec<_> = frames_to_render
                                     .par_iter()
                                     .enumerate()
                                     .map(|(frame_idx, src_buf)| {
@@ -1721,6 +1874,22 @@ impl eframe::App for DitherCraftApp {
                                         (out, delay_ms)
                                     })
                                     .collect();
+
+                                if self.temporal_coherence_enabled {
+                                    let raw_sources: Vec<ImageBuffer> = frames_to_render.iter().map(|b| (**b).clone()).collect();
+                                    let dithered: Vec<ImageBuffer> = rendered.iter().map(|(b, _)| b.clone()).collect();
+                                    let filter = TemporalCoherenceFilter::new(TemporalCoherenceConfig {
+                                        damping: self.temporal_coherence_damping,
+                                        motion_threshold: self.temporal_coherence_threshold,
+                                    });
+                                    if let Ok(filtered) = filter.apply_sequence(&raw_sources, &dithered) {
+                                        for (i, f) in filtered.into_iter().enumerate() {
+                                            if i < rendered.len() {
+                                                rendered[i].0 = f;
+                                            }
+                                        }
+                                    }
+                                }
 
                                 if let Ok(mut png_writer) = encoder.write_header() {
                                     for (buf, delay_ms) in rendered {
@@ -1786,7 +1955,7 @@ impl eframe::App for DitherCraftApp {
                                 };
 
                                 use rayon::prelude::*;
-                                let rendered: Vec<_> = frames_to_render
+                                let mut rendered: Vec<_> = frames_to_render
                                     .par_iter()
                                     .enumerate()
                                     .map(|(frame_idx, src_buf)| {
@@ -1819,6 +1988,22 @@ impl eframe::App for DitherCraftApp {
                                         (out, delay_ms)
                                     })
                                     .collect();
+
+                                if self.temporal_coherence_enabled {
+                                    let raw_sources: Vec<ImageBuffer> = frames_to_render.iter().map(|b| (**b).clone()).collect();
+                                    let dithered: Vec<ImageBuffer> = rendered.iter().map(|(b, _)| b.clone()).collect();
+                                    let filter = TemporalCoherenceFilter::new(TemporalCoherenceConfig {
+                                        damping: self.temporal_coherence_damping,
+                                        motion_threshold: self.temporal_coherence_threshold,
+                                    });
+                                    if let Ok(filtered) = filter.apply_sequence(&raw_sources, &dithered) {
+                                        for (i, f) in filtered.into_iter().enumerate() {
+                                            if i < rendered.len() {
+                                                rendered[i].0 = f;
+                                            }
+                                        }
+                                    }
+                                }
 
                                 for (buf, delay_ms) in rendered {
                                     let mut single_webp = Vec::new();
@@ -2021,6 +2206,55 @@ impl eframe::App for DitherCraftApp {
                     }
                 });
 
+                ui.menu_button("Transform", |ui| {
+                    if ui.button("⟳ Rotate 90° Clockwise").clicked() {
+                        self.transform_rotate_90_cw();
+                        ui.close_menu();
+                    }
+                    if ui.button("↻ Rotate 180°").clicked() {
+                        self.transform_rotate_180();
+                        ui.close_menu();
+                    }
+                    if ui.button("⟲ Rotate 90° Counter-Clockwise").clicked() {
+                        self.transform_rotate_270_cw();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("⇄ Flip Horizontal").clicked() {
+                        self.transform_flip_horizontal();
+                        ui.close_menu();
+                    }
+                    if ui.button("⇅ Flip Vertical").clicked() {
+                        self.transform_flip_vertical();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.label("Integer Nearest-Neighbor Scale:");
+                    if ui.button("2x Integer Scale").clicked() {
+                        self.transform_scale_integer(2);
+                        ui.close_menu();
+                    }
+                    if ui.button("4x Integer Scale").clicked() {
+                        self.transform_scale_integer(4);
+                        ui.close_menu();
+                    }
+                    if ui.button("8x Integer Scale").clicked() {
+                        self.transform_scale_integer(8);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("✂ Crop Workshop...").clicked() {
+                        if let Some(src) = &self.source_image {
+                            self.crop_x = 0;
+                            self.crop_y = 0;
+                            self.crop_width = src.width;
+                            self.crop_height = src.height;
+                            self.crop_dialog_open = true;
+                        }
+                        ui.close_menu();
+                    }
+                });
+
                 ui.menu_button("Presets", |ui| {
                     if ui.button("🖼 Visual Preset Gallery...").clicked() {
                         self.show_preset_gallery = true;
@@ -2213,6 +2447,86 @@ impl eframe::App for DitherCraftApp {
                 is_open = false;
             }
             self.show_shortcuts_dialog = is_open;
+        }
+
+        // Canvas Geometry Crop Workshop Modal Dialog
+        if self.crop_dialog_open {
+            let mut is_open = true;
+            let mut apply_crop = false;
+            let mut cancel_crop = false;
+            egui::Window::new("Canvas Geometry — Crop Workshop").collapsible(false).resizable(false).open(&mut is_open).show(ctx, |ui| {
+                if let Some(src) = &self.source_image {
+                    ui.heading("Interactive Canvas Crop");
+                    ui.label(format!("Source Dimensions: {} x {} px", src.width, src.height));
+                    ui.add_space(6.0);
+
+                    egui::Grid::new("crop_inputs_grid").spacing([16.0, 6.0]).show(ui, |ui| {
+                        ui.label("Origin X:");
+                        let max_x = src.width.saturating_sub(1);
+                        ui.add(egui::DragValue::new(&mut self.crop_x).range(0..=max_x));
+                        ui.end_row();
+
+                        ui.label("Origin Y:");
+                        let max_y = src.height.saturating_sub(1);
+                        ui.add(egui::DragValue::new(&mut self.crop_y).range(0..=max_y));
+                        ui.end_row();
+
+                        ui.label("Crop Width:");
+                        let max_w = src.width.saturating_sub(self.crop_x).max(1);
+                        ui.add(egui::DragValue::new(&mut self.crop_width).range(1..=max_w));
+                        ui.end_row();
+
+                        ui.label("Crop Height:");
+                        let max_h = src.height.saturating_sub(self.crop_y).max(1);
+                        ui.add(egui::DragValue::new(&mut self.crop_height).range(1..=max_h));
+                        ui.end_row();
+                    });
+
+                    ui.separator();
+                    ui.label("Retro Display Aspect Ratio Presets:");
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Game Boy (160×144)").clicked() {
+                            self.crop_width = 160.min(src.width);
+                            self.crop_height = 144.min(src.height);
+                        }
+                        if ui.button("NES / SNES (256×224)").clicked() {
+                            self.crop_width = 256.min(src.width);
+                            self.crop_height = 224.min(src.height);
+                        }
+                        if ui.button("CGA / EGA (320×200)").clicked() {
+                            self.crop_width = 320.min(src.width);
+                            self.crop_height = 200.min(src.height);
+                        }
+                        if ui.button("Arcade CRT (224×288)").clicked() {
+                            self.crop_width = 224.min(src.width);
+                            self.crop_height = 288.min(src.height);
+                        }
+                        if ui.button("Square (1:1)").clicked() {
+                            let side = src.width.min(src.height);
+                            self.crop_width = side;
+                            self.crop_height = side;
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Apply Crop").clicked() {
+                            apply_crop = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel_crop = true;
+                        }
+                    });
+                }
+            });
+
+            if apply_crop {
+                let (x, y, w, h) = (self.crop_x, self.crop_y, self.crop_width, self.crop_height);
+                self.transform_crop(x, y, w, h);
+                self.crop_dialog_open = false;
+            } else if cancel_crop || !is_open {
+                self.crop_dialog_open = false;
+            }
         }
 
         // Visual Preset Gallery Modal Dialog
@@ -2905,121 +3219,200 @@ impl eframe::App for DitherCraftApp {
                 check_slider(ui, egui::Slider::new(&mut self.tonal_cycle_step, 0..=8).text("Cycle Step"), &mut changed, &mut preview_changed);
             });
 
-            // Stackable Downstream Effects
+            // Phase 8.2: Draggable & Reorderable Downstream Effects Stack
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Downstream Effects Stack:");
+                    ui.label("Downstream Effects Stack (Layers):");
                     if ui.button("🎲 Shuffle").on_hover_text("Randomize retro glitch, CRT, and bloom adjustments").clicked() {
                         self.shuffle_adjustments();
                         changed = true;
                     }
-                });
-                if ui.checkbox(&mut self.glow_enabled, "Epsilon Glow Bloom").changed() {
-                    changed = true;
-                }
-                if self.glow_enabled {
-                    check_slider(ui, egui::Slider::new(&mut self.glow_threshold, 50..=250).text("Threshold"), &mut changed, &mut preview_changed);
-                    check_slider(ui, egui::Slider::new(&mut self.glow_radius, 1..=12).text("Radius"), &mut changed, &mut preview_changed);
-                }
-
-                if ui.checkbox(&mut self.chromatic_enabled, "Chromatic Aberration").changed() {
-                    changed = true;
-                }
-                if self.chromatic_enabled {
-                    check_slider(ui, egui::Slider::new(&mut self.chromatic_shift, -15..=15).text("Shift X"), &mut changed, &mut preview_changed);
-                    if ui.checkbox(&mut self.chromatic_radial, "Radial Shift").changed() {
+                    if ui.button("↺ Reset").on_hover_text("Reset stack to defaults").clicked() {
+                        self.effect_stack = EffectStack::default_stack();
                         changed = true;
                     }
-                }
+                });
 
-                if ui.checkbox(&mut self.glitch_enabled, "JPEG Glitch Core").changed() {
-                    changed = true;
-                }
-                if self.glitch_enabled {
-                    egui::ComboBox::from_id_salt("glitch_mode_picker")
-                        .selected_text(match self.glitch_mode {
-                            JpegSubMode::BlockShift => "Block Shift",
-                            JpegSubMode::ChannelSwap => "Channel Swap",
-                            JpegSubMode::ScanLineOffset => "Scan Line Offset",
-                            JpegSubMode::BlockScramble => "Block Scramble",
-                            JpegSubMode::InterlaceCorruption => "Interlace Corruption",
-                        })
-                        .show_ui(ui, |ui| {
-                            for (mode, label) in [
-                                (JpegSubMode::BlockShift, "Block Shift"),
-                                (JpegSubMode::ChannelSwap, "Channel Swap"),
-                                (JpegSubMode::ScanLineOffset, "Scan Line Offset"),
-                                (JpegSubMode::BlockScramble, "Block Scramble"),
-                                (JpegSubMode::InterlaceCorruption, "Interlace Corruption"),
-                            ] {
-                                if ui.selectable_value(&mut self.glitch_mode, mode, label).clicked() {
-                                    changed = true;
+                let mut move_up = None;
+                let mut move_down = None;
+                let mut duplicate_node = None;
+                let mut delete_node = None;
+                let num_nodes = self.effect_stack.nodes.len();
+
+                for (idx, node) in self.effect_stack.nodes.iter_mut().enumerate() {
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            changed |= ui.checkbox(&mut node.enabled, "").changed();
+                            ui.strong(&node.name);
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("🗑").on_hover_text("Delete layer").clicked() {
+                                    delete_node = Some(idx);
                                 }
-                            }
-                        });
-                    check_slider(
-                        ui,
-                        egui::Slider::new(&mut self.glitch_intensity, 0.05..=1.0).text("Glitch Intensity"),
-                        &mut changed,
-                        &mut preview_changed,
-                    );
-                }
-
-                if ui.checkbox(&mut self.crt_enabled, "Vintage CRT Simulation").changed() {
-                    changed = true;
-                }
-                if self.crt_enabled {
-                    check_slider(ui, egui::Slider::new(&mut self.crt_scanline, 0.0..=1.0).text("Scanlines"), &mut changed, &mut preview_changed);
-                    check_slider(ui, egui::Slider::new(&mut self.crt_barrel, 0.0..=0.3).text("Barrel"), &mut changed, &mut preview_changed);
-                    check_slider(ui, egui::Slider::new(&mut self.crt_vignette, 0.0..=1.0).text("Vignette"), &mut changed, &mut preview_changed);
-                }
-
-                if ui.checkbox(&mut self.blur_enabled, "Gaussian Blur").changed() {
-                    changed = true;
-                }
-                if self.blur_enabled {
-                    check_slider(ui, egui::Slider::new(&mut self.blur_sigma, 0.2..=5.0).text("Sigma"), &mut changed, &mut preview_changed);
-                }
-
-                if ui.checkbox(&mut self.sharpen_enabled, "Sharpen").changed() {
-                    changed = true;
-                }
-                if self.sharpen_enabled {
-                    check_slider(ui, egui::Slider::new(&mut self.sharpen_amount, 0.1..=3.0).text("Amount"), &mut changed, &mut preview_changed);
-                }
-
-                if ui.checkbox(&mut self.lut_enabled, "3D LUT Film & Phosphor Grading").changed() {
-                    changed = true;
-                }
-                if self.lut_enabled {
-                    egui::ComboBox::from_id_salt("lut_preset_picker")
-                        .selected_text(if self.custom_lut.is_some() { "Custom .cube LUT" } else { &self.lut_preset_name })
-                        .show_ui(ui, |ui| {
-                            for name in ["Technicolor 2-Strip", "Vintage Warm 1970", "Amber Phosphor", "Cyber Matrix", "Bleach Bypass"] {
-                                if ui.selectable_label(self.custom_lut.is_none() && self.lut_preset_name == name, name).clicked() {
-                                    self.lut_preset_name = name.to_string();
-                                    self.custom_lut = None;
-                                    changed = true;
+                                if ui.small_button("📋").on_hover_text("Duplicate layer").clicked() {
+                                    duplicate_node = Some(idx);
                                 }
-                            }
+                                if idx + 1 < num_nodes && ui.small_button("⬇").on_hover_text("Move down").clicked() {
+                                    move_down = Some(idx);
+                                }
+                                if idx > 0 && ui.small_button("⬆").on_hover_text("Move up").clicked() {
+                                    move_up = Some(idx);
+                                }
+                            });
                         });
-                    ui.horizontal(|ui| {
-                        if ui.button("Load .cube LUT...").clicked()
-                            && let Some(path) = rfd::FileDialog::new().add_filter("3D LUT (.cube)", &["cube"]).pick_file()
-                            && let Ok(content) = std::fs::read_to_string(&path)
-                            && let Ok(lut) = Cube3dLut::from_cube_str(&content)
-                        {
-                            self.status_text = format!("Loaded 3D LUT '{}' (size {}^3)", lut.title, lut.size);
-                            self.custom_lut = Some(lut);
-                            self.lut_enabled = true;
-                            changed = true;
-                        }
-                        if self.custom_lut.is_some() && ui.button("Clear Custom").clicked() {
-                            self.custom_lut = None;
-                            changed = true;
+
+                        ui.horizontal(|ui| {
+                            ui.label("Blend:");
+                            egui::ComboBox::from_id_salt(format!("blend_{}", node.id)).selected_text(node.blend_mode.name()).show_ui(ui, |ui| {
+                                for mode in BlendMode::ALL {
+                                    if ui.selectable_value(&mut node.blend_mode, mode, mode.name()).clicked() {
+                                        changed = true;
+                                    }
+                                }
+                            });
+                            ui.label("α:");
+                            check_slider(ui, egui::Slider::new(&mut node.opacity, 0.0..=1.0).show_value(true), &mut changed, &mut preview_changed);
+                        });
+
+                        // Layer-specific parameter editors
+                        match &mut node.kind {
+                            EffectKind::Glow(glow) => {
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut glow.threshold, 50..=250).text("Threshold"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                                check_slider(ui, egui::Slider::new(&mut glow.radius, 1..=12).text("Radius"), &mut changed, &mut preview_changed);
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut glow.intensity, 0.1..=2.0).text("Intensity"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                            }
+                            EffectKind::Chromatic(chroma) => {
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut chroma.shift_x, -15..=15).text("Shift X"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                                changed |= ui.checkbox(&mut chroma.radial, "Radial Shift").changed();
+                            }
+                            EffectKind::Glitch(glitch) => {
+                                egui::ComboBox::from_id_salt(format!("glitch_mode_{}", node.id))
+                                    .selected_text(match glitch.mode {
+                                        JpegSubMode::BlockShift => "Block Shift",
+                                        JpegSubMode::ChannelSwap => "Channel Swap",
+                                        JpegSubMode::ScanLineOffset => "Scan Line Offset",
+                                        JpegSubMode::BlockScramble => "Block Scramble",
+                                        JpegSubMode::InterlaceCorruption => "Interlace Corruption",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        for (m, lbl) in [
+                                            (JpegSubMode::BlockShift, "Block Shift"),
+                                            (JpegSubMode::ChannelSwap, "Channel Swap"),
+                                            (JpegSubMode::ScanLineOffset, "Scan Line Offset"),
+                                            (JpegSubMode::BlockScramble, "Block Scramble"),
+                                            (JpegSubMode::InterlaceCorruption, "Interlace Corruption"),
+                                        ] {
+                                            if ui.selectable_value(&mut glitch.mode, m, lbl).clicked() {
+                                                changed = true;
+                                            }
+                                        }
+                                    });
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut glitch.intensity, 0.05..=1.0).text("Intensity"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                            }
+                            EffectKind::Crt(crt) => {
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut crt.scanline_intensity, 0.0..=1.0).text("Scanlines"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut crt.barrel_curvature, 0.0..=0.3).text("Barrel"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut crt.vignette_intensity, 0.0..=1.0).text("Vignette"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                            }
+                            EffectKind::Blur(blur) => {
+                                check_slider(ui, egui::Slider::new(&mut blur.sigma, 0.2..=5.0).text("Sigma"), &mut changed, &mut preview_changed);
+                            }
+                            EffectKind::Sharpen(sharpen) => {
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut sharpen.amount, 0.1..=3.0).text("Amount"),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                            }
+                            EffectKind::Lut3d(lut) => {
+                                ui.label(format!("3D LUT: '{}' ({}³)", lut.title, lut.size));
+                            }
                         }
                     });
                 }
+
+                if let Some(idx) = move_up {
+                    self.effect_stack.move_up(idx);
+                    changed = true;
+                }
+                if let Some(idx) = move_down {
+                    self.effect_stack.move_down(idx);
+                    changed = true;
+                }
+                if let Some(idx) = duplicate_node {
+                    self.effect_stack.duplicate(idx);
+                    changed = true;
+                }
+                if let Some(idx) = delete_node {
+                    self.effect_stack.remove(idx);
+                    changed = true;
+                }
+
+                // Add Effect Layer Dropdown
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("add_effect_dropdown").selected_text("➕ Add Effect Layer...").show_ui(ui, |ui| {
+                        if ui.button("Epsilon Glow Bloom").clicked() {
+                            self.effect_stack.add(EffectNode::new(0, "Glow Bloom", EffectKind::Glow(EpsilonGlow::default())));
+                            changed = true;
+                        }
+                        if ui.button("Chromatic Aberration").clicked() {
+                            self.effect_stack.add(EffectNode::new(0, "Chromatic Aberration", EffectKind::Chromatic(ChromaticAberration::default())));
+                            changed = true;
+                        }
+                        if ui.button("JPEG Glitch Core").clicked() {
+                            self.effect_stack.add(EffectNode::new(0, "JPEG Glitch", EffectKind::Glitch(JpegGlitchCore::default())));
+                            changed = true;
+                        }
+                        if ui.button("Vintage CRT Simulation").clicked() {
+                            self.effect_stack.add(EffectNode::new(0, "Vintage CRT", EffectKind::Crt(VintageCrtSimulation::default())));
+                            changed = true;
+                        }
+                        if ui.button("Gaussian Blur").clicked() {
+                            self.effect_stack.add(EffectNode::new(0, "Gaussian Blur", EffectKind::Blur(GaussianBlur::default())));
+                            changed = true;
+                        }
+                        if ui.button("Sharpen (Unsharp Mask)").clicked() {
+                            self.effect_stack.add(EffectNode::new(0, "Sharpen", EffectKind::Sharpen(Sharpen::default())));
+                            changed = true;
+                        }
+                    });
+                });
             });
 
             // Temporal Noise & Animation
@@ -3208,7 +3601,7 @@ impl eframe::App for DitherCraftApp {
                 }
 
                 // Floating Viewport HUD
-                let hud_size = egui::vec2(440.0, 34.0);
+                let hud_size = egui::vec2(580.0, 34.0);
                 let hud_rect = egui::Rect::from_min_size(egui::pos2(available_rect.max.x - hud_size.x - 16.0, available_rect.min.y + 16.0), hud_size);
 
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(hud_rect), |ui| {
@@ -3239,6 +3632,16 @@ impl eframe::App for DitherCraftApp {
                                 && ui.small_button("Clear Frame").on_hover_text("Clear aspect ratio guide").clicked()
                             {
                                 self.aspect_guide = RetroAspectGuide::None;
+                            }
+                            ui.separator();
+                            if ui.button("⟳").on_hover_text("Rotate 90° Clockwise").clicked() {
+                                self.transform_rotate_90_cw();
+                            }
+                            if ui.button("⇄").on_hover_text("Flip Horizontal").clicked() {
+                                self.transform_flip_horizontal();
+                            }
+                            if ui.button("✂").on_hover_text("Open Crop Workshop").clicked() {
+                                self.crop_dialog_open = true;
                             }
                         });
                     });
@@ -3437,6 +3840,20 @@ impl eframe::App for DitherCraftApp {
 
                 if cadence_changed || onion_changed {
                     self.set_current_frame(self.timeline_frame);
+                }
+
+                ui.separator();
+                let mut tc_changed = false;
+                tc_changed |= ui
+                    .checkbox(&mut self.temporal_coherence_enabled, "Temporal Coherence")
+                    .on_hover_text("Suppress inter-frame high-frequency dither flicker")
+                    .changed();
+                if self.temporal_coherence_enabled {
+                    tc_changed |= ui.add(egui::Slider::new(&mut self.temporal_coherence_damping, 0.1..=0.95).text("Damping")).changed();
+                    tc_changed |= ui.add(egui::Slider::new(&mut self.temporal_coherence_threshold, 0.01..=0.20).text("Motion Thresh")).changed();
+                }
+                if tc_changed {
+                    self.trigger_render_preview();
                 }
 
                 ui.separator();

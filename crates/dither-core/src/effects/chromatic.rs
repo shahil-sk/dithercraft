@@ -1,9 +1,10 @@
 use crate::buffer::ImageBuffer;
 use crate::error::DitherError;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Chromatic Aberration: Radially and directionally shifts RGB color channels.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChromaticAberration {
     pub shift_x: i32,
     pub shift_y: i32,

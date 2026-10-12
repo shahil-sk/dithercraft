@@ -7,6 +7,7 @@ pub mod modulation;
 pub mod ordered;
 pub mod spatial_mask;
 pub mod traits;
+pub mod wavefront;
 
 pub use artistic::{EtchingCrosshatch, MatrixGlitchDispersion, Mezzotint, NewsprintGrain, Stippling, WoodcutSimulation};
 pub use bitmap::{FixedThreshold, GaussianLocalThreshold, MeanThreshold, MultiLevelStep, NiblackBinarization, OtsuThreshold, SauvolaBinarization};
@@ -25,6 +26,7 @@ pub use ordered::{
 };
 pub use spatial_mask::{AlphaMaskDither, TonalBandDither};
 pub use traits::DitherAlgorithm;
+pub use wavefront::{ParallelWavefrontFloydSteinberg, diffuse_wavefront_parallel};
 
 /// Canonical classification of the 6 major mathematical algorithm families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +224,7 @@ pub fn create_algorithm(name: &str) -> Option<Box<dyn DitherAlgorithm>> {
         "custommatrix" | "custom" => Some(Box::new(CustomMatrixDither::default())),
         "morphogenesis" | "reactiondiffusion" => Some(Box::new(crate::generative::ReactionDiffusionDither::default())),
         "vectorflowfield" | "flowfield" => Some(Box::new(crate::generative::FlowFieldSteeredDither::default())),
+        "wavefront" | "parallelwavefront" | "wavefrontfloydsteinberg" => Some(Box::new(ParallelWavefrontFloydSteinberg::default())),
 
         _ => None,
     }

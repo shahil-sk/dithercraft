@@ -209,6 +209,162 @@ impl ImageBuffer {
             chunk[2] = sim.b;
         }
     }
+
+    /// Lossless 90-degree clockwise rotation.
+    pub fn rotate_90_cw(&self) -> Result<Self, DitherError> {
+        let mut out = Self::new(self.height, self.width)?;
+        let src_w = self.width as usize;
+        let src_h = self.height as usize;
+        let dst_w = self.height as usize;
+
+        for y in 0..src_h {
+            let dst_x = src_h - 1 - y;
+            for x in 0..src_w {
+                let dst_y = x;
+                let src_idx = (y * src_w + x) * 3;
+                let dst_idx = (dst_y * dst_w + dst_x) * 3;
+                out.data[dst_idx..dst_idx + 3].copy_from_slice(&self.data[src_idx..src_idx + 3]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Lossless 180-degree rotation.
+    pub fn rotate_180(&self) -> Result<Self, DitherError> {
+        let mut out = Self::new(self.width, self.height)?;
+        let w = self.width as usize;
+        let h = self.height as usize;
+
+        for y in 0..h {
+            let dst_y = h - 1 - y;
+            for x in 0..w {
+                let dst_x = w - 1 - x;
+                let src_idx = (y * w + x) * 3;
+                let dst_idx = (dst_y * w + dst_x) * 3;
+                out.data[dst_idx..dst_idx + 3].copy_from_slice(&self.data[src_idx..src_idx + 3]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Lossless 270-degree clockwise (90-degree counter-clockwise) rotation.
+    pub fn rotate_270_cw(&self) -> Result<Self, DitherError> {
+        let mut out = Self::new(self.height, self.width)?;
+        let src_w = self.width as usize;
+        let src_h = self.height as usize;
+        let dst_w = self.height as usize;
+
+        for y in 0..src_h {
+            let dst_x = y;
+            for x in 0..src_w {
+                let dst_y = src_w - 1 - x;
+                let src_idx = (y * src_w + x) * 3;
+                let dst_idx = (dst_y * dst_w + dst_x) * 3;
+                out.data[dst_idx..dst_idx + 3].copy_from_slice(&self.data[src_idx..src_idx + 3]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Lossless horizontal flip (mirror along Y-axis).
+    pub fn flip_horizontal(&self) -> Result<Self, DitherError> {
+        let mut out = Self::new(self.width, self.height)?;
+        let w = self.width as usize;
+        let h = self.height as usize;
+
+        for y in 0..h {
+            let row_offset = y * w * 3;
+            for x in 0..w {
+                let dst_x = w - 1 - x;
+                let src_idx = row_offset + x * 3;
+                let dst_idx = row_offset + dst_x * 3;
+                out.data[dst_idx..dst_idx + 3].copy_from_slice(&self.data[src_idx..src_idx + 3]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Lossless vertical flip (mirror along X-axis).
+    pub fn flip_vertical(&self) -> Result<Self, DitherError> {
+        let mut out = Self::new(self.width, self.height)?;
+        let w = self.width as usize;
+        let h = self.height as usize;
+        let row_bytes = w * 3;
+
+        for y in 0..h {
+            let dst_y = h - 1 - y;
+            let src_offset = y * row_bytes;
+            let dst_offset = dst_y * row_bytes;
+            out.data[dst_offset..dst_offset + row_bytes].copy_from_slice(&self.data[src_offset..src_offset + row_bytes]);
+        }
+        Ok(out)
+    }
+
+    /// Nearest-neighbor crisp integer pixel scaling (1x to 16x).
+    pub fn scale_integer(&self, factor: u32) -> Result<Self, DitherError> {
+        if factor == 0 || factor > 16 {
+            return Err(DitherError::InvalidParameter("Scale factor must be between 1 and 16".into()));
+        }
+        if factor == 1 {
+            return Ok(self.clone());
+        }
+
+        let new_w = self.width.checked_mul(factor).ok_or_else(|| DitherError::InvalidParameter("Width overflow".into()))?;
+        let new_h = self.height.checked_mul(factor).ok_or_else(|| DitherError::InvalidParameter("Height overflow".into()))?;
+        let mut out = Self::new(new_w, new_h)?;
+
+        let src_w = self.width as usize;
+        let src_h = self.height as usize;
+        let f = factor as usize;
+        let dst_w = new_w as usize;
+
+        for y in 0..src_h {
+            for x in 0..src_w {
+                let src_idx = (y * src_w + x) * 3;
+                let px = &self.data[src_idx..src_idx + 3];
+
+                for dy in 0..f {
+                    let dst_y = y * f + dy;
+                    let dst_row_start = dst_y * dst_w * 3;
+                    for dx in 0..f {
+                        let dst_x = x * f + dx;
+                        let dst_idx = dst_row_start + dst_x * 3;
+                        out.data[dst_idx..dst_idx + 3].copy_from_slice(px);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Non-destructive rectangular crop within buffer bounds.
+    pub fn crop(&self, x: u32, y: u32, width: u32, height: u32) -> Result<Self, DitherError> {
+        if width == 0 || height == 0 {
+            return Err(DitherError::InvalidParameter("Crop dimensions must be positive".into()));
+        }
+        let end_x = x.checked_add(width).ok_or_else(|| DitherError::InvalidParameter("Crop X overflow".into()))?;
+        let end_y = y.checked_add(height).ok_or_else(|| DitherError::InvalidParameter("Crop Y overflow".into()))?;
+
+        if end_x > self.width || end_y > self.height {
+            return Err(DitherError::InvalidParameter(format!(
+                "Crop bounds ({x}+{width}, {y}+{height}) exceed image dimensions ({}x{})",
+                self.width, self.height
+            )));
+        }
+
+        let mut out = Self::new(width, height)?;
+        let src_w = self.width as usize;
+        let dst_w = width as usize;
+        let row_bytes = dst_w * 3;
+
+        for row in 0..(height as usize) {
+            let src_y = (y as usize) + row;
+            let src_offset = (src_y * src_w + (x as usize)) * 3;
+            let dst_offset = row * row_bytes;
+            out.data[dst_offset..dst_offset + row_bytes].copy_from_slice(&self.data[src_offset..src_offset + row_bytes]);
+        }
+        Ok(out)
+    }
 }
 
 use std::sync::Mutex;
@@ -361,5 +517,110 @@ mod tests {
         let buf2 = pool.acquire(64, 64).expect("buf2 recycled");
         assert_eq!(buf2.width, 64);
         assert_eq!(buf2.height, 64);
+    }
+
+    #[test]
+    fn test_canvas_geometry_rotations_and_flips() {
+        // Create 2x3 image
+        // [A B]
+        // [C D]
+        // [E F]
+        let mut buf = ImageBuffer::new(2, 3).expect("buf");
+        buf.set_pixel(0, 0, RgbColor::new(10, 0, 0)); // A
+        buf.set_pixel(1, 0, RgbColor::new(20, 0, 0)); // B
+        buf.set_pixel(0, 1, RgbColor::new(30, 0, 0)); // C
+        buf.set_pixel(1, 1, RgbColor::new(40, 0, 0)); // D
+        buf.set_pixel(0, 2, RgbColor::new(50, 0, 0)); // E
+        buf.set_pixel(1, 2, RgbColor::new(60, 0, 0)); // F
+
+        // Rotate 90 CW -> 3x2:
+        // [E C A]
+        // [F D B]
+        let r90 = buf.rotate_90_cw().expect("r90");
+        assert_eq!(r90.width, 3);
+        assert_eq!(r90.height, 2);
+        assert_eq!(r90.get_pixel(0, 0).expect("px").r, 50); // E
+        assert_eq!(r90.get_pixel(1, 0).expect("px").r, 30); // C
+        assert_eq!(r90.get_pixel(2, 0).expect("px").r, 10); // A
+        assert_eq!(r90.get_pixel(0, 1).expect("px").r, 60); // F
+        assert_eq!(r90.get_pixel(1, 1).expect("px").r, 40); // D
+        assert_eq!(r90.get_pixel(2, 1).expect("px").r, 20); // B
+
+        // Rotate 270 CW -> 3x2:
+        // [B D F]
+        // [A C E]
+        let r270 = buf.rotate_270_cw().expect("r270");
+        assert_eq!(r270.width, 3);
+        assert_eq!(r270.height, 2);
+        assert_eq!(r270.get_pixel(0, 0).expect("px").r, 20); // B
+        assert_eq!(r270.get_pixel(2, 0).expect("px").r, 60); // F
+        assert_eq!(r270.get_pixel(0, 1).expect("px").r, 10); // A
+        assert_eq!(r270.get_pixel(2, 1).expect("px").r, 50); // E
+
+        // Rotate 180 -> 2x3:
+        // [F E]
+        // [D C]
+        // [B A]
+        let r180 = buf.rotate_180().expect("r180");
+        assert_eq!(r180.width, 2);
+        assert_eq!(r180.height, 3);
+        assert_eq!(r180.get_pixel(0, 0).expect("px").r, 60); // F
+        assert_eq!(r180.get_pixel(1, 0).expect("px").r, 50); // E
+        assert_eq!(r180.get_pixel(0, 2).expect("px").r, 20); // B
+        assert_eq!(r180.get_pixel(1, 2).expect("px").r, 10); // A
+
+        // Horizontal flip -> 2x3:
+        // [B A]
+        // [D C]
+        // [F E]
+        let flip_h = buf.flip_horizontal().expect("flip_h");
+        assert_eq!(flip_h.get_pixel(0, 0).expect("px").r, 20);
+        assert_eq!(flip_h.get_pixel(1, 0).expect("px").r, 10);
+
+        // Vertical flip -> 2x3:
+        // [E F]
+        // [C D]
+        // [A B]
+        let flip_v = buf.flip_vertical().expect("flip_v");
+        assert_eq!(flip_v.get_pixel(0, 0).expect("px").r, 50);
+        assert_eq!(flip_v.get_pixel(1, 0).expect("px").r, 60);
+        assert_eq!(flip_v.get_pixel(0, 2).expect("px").r, 10);
+        assert_eq!(flip_v.get_pixel(1, 2).expect("px").r, 20);
+
+        // Rotating 90 CW four times should recover original
+        let r360 = buf.rotate_90_cw().expect("1").rotate_90_cw().expect("2").rotate_90_cw().expect("3").rotate_90_cw().expect("4");
+        assert_eq!(r360.data, buf.data);
+    }
+
+    #[test]
+    fn test_canvas_geometry_scale_and_crop() {
+        let mut buf = ImageBuffer::new(2, 2).expect("buf");
+        buf.set_pixel(0, 0, RgbColor::new(100, 0, 0));
+        buf.set_pixel(1, 0, RgbColor::new(0, 200, 0));
+        buf.set_pixel(0, 1, RgbColor::new(0, 0, 150));
+        buf.set_pixel(1, 1, RgbColor::new(255, 255, 255));
+
+        // 2x Integer Scale -> 4x4
+        let scaled = buf.scale_integer(2).expect("scaled");
+        assert_eq!(scaled.width, 4);
+        assert_eq!(scaled.height, 4);
+        assert_eq!(scaled.get_pixel(0, 0).expect("px").r, 100);
+        assert_eq!(scaled.get_pixel(1, 0).expect("px").r, 100);
+        assert_eq!(scaled.get_pixel(0, 1).expect("px").r, 100);
+        assert_eq!(scaled.get_pixel(1, 1).expect("px").r, 100);
+        assert_eq!(scaled.get_pixel(2, 0).expect("px").g, 200);
+        assert_eq!(scaled.get_pixel(3, 3).expect("px"), RgbColor::new(255, 255, 255));
+
+        // Crop subregion
+        let cropped = scaled.crop(1, 1, 2, 2).expect("cropped");
+        assert_eq!(cropped.width, 2);
+        assert_eq!(cropped.height, 2);
+        assert_eq!(cropped.get_pixel(0, 0).expect("px").r, 100);
+        assert_eq!(cropped.get_pixel(1, 0).expect("px").g, 200);
+
+        // Invalid crop exceeds bounds
+        assert!(scaled.crop(3, 3, 2, 2).is_err());
+        assert!(scaled.scale_integer(0).is_err());
+        assert!(scaled.scale_integer(17).is_err());
     }
 }

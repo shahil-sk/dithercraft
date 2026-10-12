@@ -1,9 +1,10 @@
 use crate::buffer::ImageBuffer;
 use crate::error::DitherError;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Gaussian Blur: Separable 1D Gaussian convolution across horizontal and vertical axes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GaussianBlur {
     pub sigma: f32, // standard deviation (e.g. 1.0 - 5.0)
 }
@@ -100,7 +101,7 @@ impl GaussianBlur {
 }
 
 /// Sharpen: High-pass unsharp mask filter emphasizing edge gradients.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sharpen {
     pub amount: f32, // Sharpening strength (0.0 to 3.0, default 0.8)
     pub sigma: f32,  // Unsharp mask blur scale (default 1.0)

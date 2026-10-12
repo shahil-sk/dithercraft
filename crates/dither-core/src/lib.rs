@@ -16,11 +16,13 @@ pub mod color;
 pub mod color_depth;
 pub mod effects;
 pub mod error;
+pub mod ffi;
 pub mod generative;
 pub mod lut;
 pub mod palette;
 pub mod renderers;
 pub mod shaders;
+pub mod simd;
 pub mod temporal;
 pub mod vector;
 pub mod video;
@@ -30,7 +32,10 @@ pub use audio::{AudioSpectrum, AudioTrack};
 pub use buffer::{HilbertCurve, ImageBuffer, ImageBufferPool};
 pub use color::{ColorHarmony, CvdMode, LabColor, OklabColor, OklchColor, RgbColor};
 pub use color_depth::{LuminosityMapping, MismatchMode};
-pub use effects::{ChromaticAberration, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen, VintageCrtSimulation};
+pub use effects::{
+    BlendMode, ChromaticAberration, EffectKind, EffectNode, EffectStack, EpsilonGlow, GaussianBlur, JpegGlitchCore, JpegSubMode, Sharpen,
+    VintageCrtSimulation,
+};
 pub use error::DitherError;
 pub use generative::{
     FlowFieldConfig, FlowFieldSteeredDither, ReactionDiffusionConfig, ReactionDiffusionDither, ReactionDiffusionMorphology,
@@ -39,6 +44,7 @@ pub use generative::{
 pub use lut::Cube3dLut;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykChannel, CmykHalftone, CmykSeparationPlates, HalftoneDotShape, PopTone};
+pub use simd::{quantize_batch_8, quantize_buffer_simd};
 pub use temporal::{
     AnimatedFrame, AnimationSequence, CadenceMode, Interpolation, Keyframe, LfoModulator, LfoWaveform, OnionSkinConfig, TemporalNoisePattern,
     TimelineTrack, render_onion_skin,
