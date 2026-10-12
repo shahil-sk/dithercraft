@@ -176,8 +176,8 @@ DitherCraft achieves complete parity across **6 mathematical categories**:
 | **Plotter Arc Fitting (G02/G03) & Nib Offset**| Phase 10 | Circular curve fitting & stroke offsetting | 70% G-code reduction and ink bleed prevention | **DELIVERED (`v0.9.8`)** |
 | **Geometric & Stippled Hatch Infill** | Phase 10 | Continuous vector boundary infills | Pen plotter shading and laser hatch toolpaths | **DELIVERED (`v0.9.8`)** |
 | **Multi-Track Automation Timeline** | Phase 11 | Cubic Bézier parameter keyframing | Dynamic parameter animation for music videos | Planned (`v1.2.0`) |
-| **Temporal Coherence & Flicker Suppression**| Phase 11 | Motion-compensated inter-frame error | Smooth video sequences with zero noise swim | Planned (`v1.2.0`) |
-| **Animation Lightbox & Onion Skinning** | Phase 11 | Multi-frame rotoscope ghosting | Frame-by-frame pixel sprite refinement | Planned (`v1.2.0`) |
+| **Animation Lightbox & Onion Skinning** | Phase 11 | Multi-frame rotoscope ghosting | Frame-by-frame pixel sprite refinement with color tints | **DELIVERED (`v0.9.8`)** |
+| **Frame Cadence Decimation & Interlacing** | Phase 11 | Pulldown, on-twos, retro step & fields | Cinematic 24 (3:2), anime 12, 8/4 FPS and CRT field blanking | **DELIVERED (`v0.9.8`)** |
 | **Procedural Blue Noise Synthesizer** | Phase 12 | Ulichney (1993) Void & Cluster | Custom high-frequency blue noise without external assets | **DELIVERED (`v0.9.6`)** |
 | **Reaction-Diffusion Dither Kernels** | Phase 12 | Gray-Scott (1984) morphogenetic PDEs | Biological, coral, and leopard spot dither aesthetics | Planned (`v1.3.0`) |
 | **Vector Flow Field Steered Dithering**| Phase 12 | 2D Perlin / Simplex curl noise flow | Topographic and woodgrain organic grain alignment | Planned (`v1.3.0`) |

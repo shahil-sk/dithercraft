@@ -34,7 +34,10 @@ pub use error::DitherError;
 pub use lut::Cube3dLut;
 pub use palette::{ColorMetric, Palette, PaletteKdTree, Swatch};
 pub use renderers::{CmykChannel, CmykHalftone, CmykSeparationPlates, HalftoneDotShape, PopTone};
-pub use temporal::{AnimatedFrame, AnimationSequence, Interpolation, Keyframe, LfoModulator, LfoWaveform, TemporalNoisePattern, TimelineTrack};
+pub use temporal::{
+    AnimatedFrame, AnimationSequence, CadenceMode, Interpolation, Keyframe, LfoModulator, LfoWaveform, OnionSkinConfig, TemporalNoisePattern,
+    TimelineTrack, render_onion_skin,
+};
 pub use vector::{
     BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, HatchStyle, MultiColorSvgSeparation, Point2D, SpotColorPlateSeparation,
     ToolpathStroke, export_smooth_bezier_svg, fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,

@@ -1,4 +1,5 @@
 use crate::buffer::ImageBuffer;
+use crate::color::RgbColor;
 use crate::error::DitherError;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -410,5 +411,222 @@ impl AnimationSequence {
             .collect();
 
         Ok(Self { frames: processed_frames? })
+    }
+}
+
+/// Cinematic, vintage, and animation frame rate decimation modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CadenceMode {
+    /// Full frame rate (no decimation)
+    #[default]
+    Passthrough,
+    /// 24 FPS theatrical cinematic cadence with 3:2 pulldown emulation
+    Cinematic24,
+    /// 12 FPS "on-twos" anime and traditional hand-drawn animation cadence
+    AnimeOnTwos12,
+    /// 8 FPS crunchy early computer / 8-bit game cadence
+    RetroCrunch8,
+    /// 4 FPS claymation / stop-motion cadence
+    StopMotion4,
+    /// Interlaced field cadence (alternating even/odd scanlines on successive frames)
+    InterlacedFields,
+}
+
+impl CadenceMode {
+    /// Compute which source frame index should be displayed at timeline step `frame_idx`
+    /// given a nominal sequence frame rate (e.g. 60 or 30 fps).
+    pub fn map_frame_index(&self, frame_idx: usize, nominal_fps: u32) -> usize {
+        match self {
+            Self::Passthrough => frame_idx,
+            Self::Cinematic24 => {
+                let cycle = frame_idx % 5;
+                let base = (frame_idx / 5) * 2;
+                if cycle < 3 { base } else { base + 1 }
+            }
+            Self::AnimeOnTwos12 => {
+                let step = (nominal_fps / 12).max(2) as usize;
+                (frame_idx / step) * step
+            }
+            Self::RetroCrunch8 => {
+                let step = (nominal_fps / 8).max(1) as usize;
+                (frame_idx / step) * step
+            }
+            Self::StopMotion4 => {
+                let step = (nominal_fps / 4).max(1) as usize;
+                (frame_idx / step) * step
+            }
+            Self::InterlacedFields => frame_idx,
+        }
+    }
+
+    /// Apply interlaced field blanking or line hold if in InterlacedFields mode.
+    pub fn apply_interlacing(&self, frame: &ImageBuffer, frame_idx: usize) -> ImageBuffer {
+        if *self != Self::InterlacedFields {
+            return frame.clone();
+        }
+        let mut out = frame.clone();
+        let field_parity = frame_idx % 2;
+        for y in 0..out.height {
+            if (y as usize % 2) != field_parity {
+                for x in 0..out.width {
+                    if let Some(px) = out.get_pixel(x, y) {
+                        out.set_pixel(x, y, RgbColor::new(px.r / 3, px.g / 3, px.b / 3));
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Onion skinning / multi-frame ghosting for rotoscoping and animation auditing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct OnionSkinConfig {
+    pub prev_frames: usize,
+    pub next_frames: usize,
+    pub opacity: f32,
+    pub tint_previous: [u8; 3],
+    pub tint_next: [u8; 3],
+}
+
+impl Default for OnionSkinConfig {
+    fn default() -> Self {
+        Self { prev_frames: 1, next_frames: 1, opacity: 0.35, tint_previous: [255, 60, 60], tint_next: [60, 220, 255] }
+    }
+}
+
+/// Composite adjacent frames as transparent ghost overlays for rotoscoping and animation auditing.
+pub fn render_onion_skin<B: std::borrow::Borrow<ImageBuffer>>(
+    frames: &[B],
+    current_idx: usize,
+    config: &OnionSkinConfig,
+) -> Result<ImageBuffer, DitherError> {
+    if frames.is_empty() {
+        return Err(DitherError::InvalidDimensions { width: 0, height: 0, expected_len: 0, actual_len: 0 });
+    }
+
+    let current = frames[current_idx.min(frames.len() - 1)].borrow();
+    let width = current.width;
+    let height = current.height;
+    let mut out = current.clone();
+
+    let opacity = config.opacity.clamp(0.0, 1.0);
+    if opacity <= 0.001 {
+        return Ok(out);
+    }
+
+    // Blend previous frames (tinted red by default)
+    let start_prev = current_idx.saturating_sub(config.prev_frames);
+    for (offset, item) in frames[start_prev..current_idx].iter().enumerate() {
+        let prev = item.borrow();
+        if prev.width != width || prev.height != height {
+            continue;
+        }
+        let distance = current_idx - (start_prev + offset);
+        let weight = opacity / distance as f32;
+        let tint = config.tint_previous;
+
+        for y in 0..height {
+            for x in 0..width {
+                if let (Some(cur_px), Some(prev_px)) = (out.get_pixel(x, y), prev.get_pixel(x, y)) {
+                    let lum = prev_px.luminance() as f32 / 255.0;
+                    let pr = tint[0] as f32 * lum;
+                    let pg = tint[1] as f32 * lum;
+                    let pb = tint[2] as f32 * lum;
+
+                    let r = ((1.0 - weight) * cur_px.r as f32 + weight * pr).clamp(0.0, 255.0) as u8;
+                    let g = ((1.0 - weight) * cur_px.g as f32 + weight * pg).clamp(0.0, 255.0) as u8;
+                    let b = ((1.0 - weight) * cur_px.b as f32 + weight * pb).clamp(0.0, 255.0) as u8;
+                    out.set_pixel(x, y, RgbColor::new(r, g, b));
+                }
+            }
+        }
+    }
+
+    // Blend next frames (tinted cyan by default)
+    let start_next = (current_idx + 1).min(frames.len());
+    let end_next = (current_idx + 1 + config.next_frames).min(frames.len());
+    for (offset, item) in frames[start_next..end_next].iter().enumerate() {
+        let next = item.borrow();
+        if next.width != width || next.height != height {
+            continue;
+        }
+        let distance = offset + 1;
+        let weight = opacity / distance as f32;
+        let tint = config.tint_next;
+
+        for y in 0..height {
+            for x in 0..width {
+                if let (Some(cur_px), Some(next_px)) = (out.get_pixel(x, y), next.get_pixel(x, y)) {
+                    let lum = next_px.luminance() as f32 / 255.0;
+                    let nr = tint[0] as f32 * lum;
+                    let ng = tint[1] as f32 * lum;
+                    let nb = tint[2] as f32 * lum;
+
+                    let r = ((1.0 - weight) * cur_px.r as f32 + weight * nr).clamp(0.0, 255.0) as u8;
+                    let g = ((1.0 - weight) * cur_px.g as f32 + weight * ng).clamp(0.0, 255.0) as u8;
+                    let b = ((1.0 - weight) * cur_px.b as f32 + weight * nb).clamp(0.0, 255.0) as u8;
+                    out.set_pixel(x, y, RgbColor::new(r, g, b));
+                }
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cadence_mode_mapping_and_interlacing() {
+        let mode_passthrough = CadenceMode::Passthrough;
+        assert_eq!(mode_passthrough.map_frame_index(7, 30), 7);
+
+        let mode_anime = CadenceMode::AnimeOnTwos12;
+        assert_eq!(mode_anime.map_frame_index(0, 24), 0);
+        assert_eq!(mode_anime.map_frame_index(1, 24), 0);
+        assert_eq!(mode_anime.map_frame_index(2, 24), 2);
+        assert_eq!(mode_anime.map_frame_index(3, 24), 2);
+
+        let mode_cinematic = CadenceMode::Cinematic24;
+        assert_eq!(mode_cinematic.map_frame_index(0, 60), 0);
+        assert_eq!(mode_cinematic.map_frame_index(1, 60), 0);
+        assert_eq!(mode_cinematic.map_frame_index(2, 60), 0);
+        assert_eq!(mode_cinematic.map_frame_index(3, 60), 1);
+        assert_eq!(mode_cinematic.map_frame_index(4, 60), 1);
+
+        let mut buf = ImageBuffer::new(4, 4).expect("buf");
+        for y in 0..4 {
+            for x in 0..4 {
+                buf.set_pixel(x, y, RgbColor::new(240, 240, 240));
+            }
+        }
+        let interlaced = CadenceMode::InterlacedFields.apply_interlacing(&buf, 0);
+        // Field parity 0: even scanlines active (y=0, y=2 full), odd dim (y=1, y=3 dimmed)
+        assert_eq!(interlaced.get_pixel(0, 0).expect("px").r, 240);
+        assert_eq!(interlaced.get_pixel(0, 1).expect("px").r, 80);
+    }
+
+    #[test]
+    fn test_onion_skinning_overlay() {
+        let mut f0 = ImageBuffer::new(4, 4).expect("f0");
+        let mut f1 = ImageBuffer::new(4, 4).expect("f1");
+        let mut f2 = ImageBuffer::new(4, 4).expect("f2");
+
+        for y in 0..4 {
+            for x in 0..4 {
+                f0.set_pixel(x, y, RgbColor::new(255, 255, 255));
+                f1.set_pixel(x, y, RgbColor::new(100, 100, 100));
+                f2.set_pixel(x, y, RgbColor::new(255, 255, 255));
+            }
+        }
+
+        let frames = vec![f0, f1, f2];
+        let cfg = OnionSkinConfig::default();
+        let skinned = render_onion_skin(&frames, 1, &cfg).expect("onion skin");
+        assert_eq!(skinned.width, 4);
+        assert_eq!(skinned.height, 4);
     }
 }

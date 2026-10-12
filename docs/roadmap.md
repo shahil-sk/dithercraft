@@ -351,17 +351,18 @@ Focus: Transform DitherCraft into a comprehensive motion graphics suite for musi
   - Optical flow estimation dampening dither pattern jitter in static background regions while maintaining crisp contrast on moving subjects.
 
 ### 11.3 Onion Skinning & Pixel Animation Auditing
-- [ ] **Traditional Animation Lightbox**:
-  - Multi-frame onion skinning displaying preceding (tinted red) and succeeding (tinted blue/green) frames with configurable opacity.
-  - Essential for pixel artists rotoscoping live-action footage or refining frame-by-frame retro game sprites.
+- [x] **Traditional Animation Lightbox** (DELIVERED in `v0.9.8`):
+  - Multi-frame onion skinning displaying preceding (tinted red) and succeeding (tinted cyan/blue) frames with configurable opacity and windowing.
+  - Interactive controls in transport bar and export pipeline integration for rotoscoping and sprite auditing.
 
 ### 11.4 Frame-Rate Decimation & Vintage Refresh Emulation
-- [ ] **Temporal Frame Decimation**:
+- [x] **Temporal Frame Decimation** (DELIVERED in `v0.9.8`):
   - Variable temporal frame rate decimation simulating classic cinematic and gaming standards:
-    - 60 Hz NTSC / 50 Hz PAL interlaced field simulation.
-    - 24 fps theatrical cinematic cadence.
-    - 12 fps "on-twos" anime / cartoon cadence.
-    - 8 fps / 4 fps crunchy retro computer / stop-motion cadence.
+    - 60 Hz NTSC / 50 Hz PAL interlaced field simulation (`InterlacedFields`).
+    - 24 fps theatrical cinematic cadence with 3:2 pulldown (`Cinematic24`).
+    - 12 fps "on-twos" anime / cartoon cadence (`AnimeOnTwos12`).
+    - 8 fps / 4 fps crunchy retro computer / stop-motion cadence (`RetroCrunch8`, `StopMotion4`).
+  - Interactive dropdown in transport bar and export pipeline synchronization.
 
 ---
 
@@ -418,7 +419,7 @@ Focus: Universal accessibility, zero-install web deployments, and third-party DS
 | **Phase 8** | Studio UI/UX & Ergonomics | Snapshot comparator; magnifier loupe; shortcuts HUD; tone curves; visual browser. | **IN PROGRESS** |
 | **Phase 9** | Masks, Custom Matrix & LUT | Selective spatial alpha masking; custom matrix builder; pure-Rust `.cube` 3D LUT engine. | **IN PROGRESS** |
 | **Phase 10** | Printmaking & Physical Fabrication | CMYK Rosette angle separations; spot color plates; plotter arc fitting (G2/G3); hatch infill. | **IN PROGRESS** |
-| **Phase 11** | Motion Graphics & Video Suite | Keyframed parameter automation timeline; temporal coherence; onion skinning; decimation. | **PLANNED** |
+| **Phase 11** | Motion Graphics & Video Suite | Keyframed parameter automation timeline; temporal coherence; onion skinning; decimation. | **IN PROGRESS** |
 | **Phase 12** | Generative DSP & Procedural Texture | Blue noise void & cluster synthesis; Gray-Scott reaction-diffusion; flow field dithering. | **PLANNED** |
 | **Phase 13** | WebAssembly & Plugin Architecture | Client-side zero-install browser Wasm build; stable C/Rust DSP plugin FFI ABI. | **PLANNED** |
 

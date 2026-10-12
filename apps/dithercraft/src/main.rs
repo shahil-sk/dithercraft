@@ -1,13 +1,13 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use dither_core::{
-    AudioSpectrum, AudioTrack, CmykHalftone, Cube3dLut, HalftoneDotShape, ImageBuffer, Mp4Demuxer, TonalBandDither, WebmDemuxer, WebpAnimFrame,
-    WebpAnimationMuxer,
+    AudioSpectrum, AudioTrack, CadenceMode, CmykHalftone, Cube3dLut, HalftoneDotShape, ImageBuffer, Mp4Demuxer, OnionSkinConfig, TonalBandDither,
+    WebmDemuxer, WebpAnimFrame, WebpAnimationMuxer,
     algorithms::*,
     color::{ColorHarmony, CvdMode, RgbColor},
     effects::*,
     palette::{ColorMetric, Palette, Swatch},
-    temporal::TemporalNoisePattern,
+    temporal::{TemporalNoisePattern, render_onion_skin},
     vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, SpotColorPlateSeparation, export_smooth_bezier_svg},
 };
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
@@ -539,6 +539,11 @@ pub struct DitherCraftApp {
 
     // Phase 9: Custom Threshold Matrix Workshop
     custom_matrix: CustomMatrixDither,
+
+    // Phase 11: Frame Cadence & Onion Skinning Lightbox
+    cadence_mode: CadenceMode,
+    onion_skin_enabled: bool,
+    onion_skin_config: OnionSkinConfig,
 }
 
 impl DitherCraftApp {
@@ -693,6 +698,10 @@ impl DitherCraftApp {
             tonal_feather: 16,
 
             custom_matrix: CustomMatrixDither::default(),
+
+            cadence_mode: CadenceMode::default(),
+            onion_skin_enabled: false,
+            onion_skin_config: OnionSkinConfig::default(),
         }
     }
 
@@ -1008,12 +1017,32 @@ impl DitherCraftApp {
         }
     }
 
+    fn prepare_render_frame(&self, frame_idx: usize) -> Arc<ImageBuffer> {
+        let mapped_idx = if self.source_frames.len() > 1 {
+            self.cadence_mode.map_frame_index(frame_idx, self.target_fps).min(self.source_frames.len() - 1)
+        } else {
+            0
+        };
+        let mut base_img = if self.onion_skin_enabled && self.source_frames.len() > 1 {
+            render_onion_skin(&self.source_frames, mapped_idx, &self.onion_skin_config).unwrap_or_else(|_| (*self.source_frames[mapped_idx]).clone())
+        } else if !self.source_frames.is_empty() {
+            (*self.source_frames[mapped_idx]).clone()
+        } else if let Some(ref src) = self.source_image {
+            (**src).clone()
+        } else {
+            ImageBuffer { width: 1, height: 1, data: vec![0, 0, 0] }
+        };
+        if self.cadence_mode == CadenceMode::InterlacedFields {
+            base_img = self.cadence_mode.apply_interlacing(&base_img, frame_idx);
+        }
+        Arc::new(base_img)
+    }
+
     fn set_current_frame(&mut self, frame: u32) {
         self.timeline_frame = frame;
         self.frame_counter = frame;
-        if !self.source_frames.is_empty() {
-            let idx = (frame as usize).min(self.source_frames.len() - 1);
-            self.source_image = Some(self.source_frames[idx].clone());
+        if !self.source_frames.is_empty() || self.source_image.is_some() {
+            self.source_image = Some(self.prepare_render_frame(frame as usize));
         }
         self.trigger_render();
     }
@@ -1488,13 +1517,7 @@ impl eframe::App for DitherCraftApp {
                             rfd::FileDialog::new().set_file_name(self.suggested_filename("gif")).add_filter("GIF Animation", &["gif"]).save_file()
                         {
                             let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
-                            let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
-                                self.source_frames.clone()
-                            } else if let Some(ref src) = self.source_image {
-                                vec![src.clone(); num_frames]
-                            } else {
-                                Vec::new()
-                            };
+                            let frames_to_render: Vec<Arc<ImageBuffer>> = (0..num_frames).map(|i| self.prepare_render_frame(i)).collect();
 
                             if !frames_to_render.is_empty()
                                 && let Ok(out_file) = std::fs::File::create(&path)
@@ -1598,13 +1621,7 @@ impl eframe::App for DitherCraftApp {
                             .save_file()
                         {
                             let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
-                            let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
-                                self.source_frames.clone()
-                            } else if let Some(ref src) = self.source_image {
-                                vec![src.clone(); num_frames]
-                            } else {
-                                Vec::new()
-                            };
+                            let frames_to_render: Vec<Arc<ImageBuffer>> = (0..num_frames).map(|i| self.prepare_render_frame(i)).collect();
 
                             if !frames_to_render.is_empty()
                                 && let Ok(out_file) = std::fs::File::create(&path)
@@ -1709,13 +1726,7 @@ impl eframe::App for DitherCraftApp {
                             rfd::FileDialog::new().set_file_name(self.suggested_filename("webp")).add_filter("WebP Animation", &["webp"]).save_file()
                         {
                             let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
-                            let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
-                                self.source_frames.clone()
-                            } else if let Some(ref src) = self.source_image {
-                                vec![src.clone(); num_frames]
-                            } else {
-                                Vec::new()
-                            };
+                            let frames_to_render: Vec<Arc<ImageBuffer>> = (0..num_frames).map(|i| self.prepare_render_frame(i)).collect();
 
                             if !frames_to_render.is_empty() {
                                 let first_frame = &frames_to_render[0];
@@ -3308,6 +3319,37 @@ impl eframe::App for DitherCraftApp {
 
                 ui.add(egui::Slider::new(&mut self.target_fps, 1..=60).text("FPS"));
                 ui.checkbox(&mut self.loop_mode, "Loop");
+
+                let mut cadence_changed = false;
+                egui::ComboBox::from_label("Cadence")
+                    .selected_text(match self.cadence_mode {
+                        CadenceMode::Passthrough => "Passthrough",
+                        CadenceMode::Cinematic24 => "Cinematic 24 (3:2)",
+                        CadenceMode::AnimeOnTwos12 => "Anime 12 (On-Twos)",
+                        CadenceMode::RetroCrunch8 => "Retro 8 FPS",
+                        CadenceMode::StopMotion4 => "Stop-Motion 4 FPS",
+                        CadenceMode::InterlacedFields => "Interlaced Fields",
+                    })
+                    .show_ui(ui, |ui| {
+                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::Passthrough, "Passthrough").changed();
+                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::Cinematic24, "Cinematic 24 (3:2)").changed();
+                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::AnimeOnTwos12, "Anime 12 (On-Twos)").changed();
+                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::RetroCrunch8, "Retro 8 FPS").changed();
+                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::StopMotion4, "Stop-Motion 4 FPS").changed();
+                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::InterlacedFields, "Interlaced Fields").changed();
+                    });
+
+                let mut onion_changed = false;
+                onion_changed |= ui.checkbox(&mut self.onion_skin_enabled, "Onion Skin").changed();
+                if self.onion_skin_enabled {
+                    onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.opacity, 0.05..=0.9).text("Ghost α")).changed();
+                    onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.prev_frames, 1..=4).text("Prev")).changed();
+                    onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.next_frames, 0..=4).text("Next")).changed();
+                }
+
+                if cadence_changed || onion_changed {
+                    self.set_current_frame(self.timeline_frame);
+                }
 
                 ui.separator();
                 let audio_loaded = self.audio_track.is_some();
