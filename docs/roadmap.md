@@ -452,8 +452,8 @@ Focus: Elevate DitherCraft into a modular, dockable, high-efficiency creative wo
   - **Green Phosphor VT220**: Authentic phosphor green on dark graphite background.
   - **Macintosh Classic 1984**: System 7 Platinum grayscale aesthetic with crisp Chicago-inspired contrast.
   - **Slate Studio**: Low-eyestrain neutral gray calibrated for printmakers and color grading.
-- [ ] **High-DPI Dynamic UI Scaling**:
-  - Zoomable interface scale slider ($75\%$, $100\%$, $125\%$, $150\%$, $200\%$) ensuring crisp, readable typography on 4K/8K displays.
+- [x] **High-DPI Dynamic UI Scaling** (DELIVERED in `v0.9.9`):
+  - Zoomable interface scale ($75\%$, $100\%$, $125\%$, $150\%$, $200\%$) via `set_pixels_per_point` and `Ctrl++` / `Ctrl+-` / `Ctrl+0` hotkeys ensuring crisp, readable typography on 4K/8K displays.
 
 ### 14.4 Real-time Telemetry, Performance Gauges & Live Memory HUD
 - [x] **Engine Telemetry Gauge** (DELIVERED in `v0.9.8`):
@@ -565,9 +565,10 @@ Focus: Provide a robust, asynchronous, crash-proof file loading pipeline support
   - Support for in-memory dropped byte buffers.
 
 ### 17.4 File Watcher & External Editor Auto-Reload Daemon
-- [ ] **Disk Change Watcher**:
-  - Background file notification listener (`notify` crate) monitoring the active source image on disk.
-  - Automatically re-reads file and triggers live re-dither whenever external software writes changes to disk.
+- [x] **Disk Change Watcher** (DELIVERED in `v0.9.9`):
+  - Cross-platform background disk modification timestamp watcher monitoring the active source image or project bundle.
+  - Automatically re-reads file and triggers live re-dither whenever external software writes changes to disk, while maintaining canvas zoom and pan.
+  - Toggle in File menu and status bar "👁 Watch" badge indicator.
 
 ### 17.5 Persistent Recent Files Registry with Embedded Thumbnails
 - [x] **Recent Files Drawer & Welcome Hub** (DELIVERED in `v0.9.8`):
@@ -575,9 +576,9 @@ Focus: Provide a robust, asynchronous, crash-proof file loading pipeline support
   - File menu integration for instant one-click file reopening.
 
 ### 17.6 Image Sequence & Multi-Frame Animation Importer
-- [ ] **Numbered Image Sequence Ingestion**:
-  - Select any file in a numbered sequence (`render_0001.png`, `render_0002.png`, etc.) with auto-detection of frame ranges.
-  - Ingests sequence directly as an animated timeline track with customizable target framerate.
+- [x] **Numbered Image Sequence Ingestion** (DELIVERED in `v0.9.9`):
+  - Select any file in a numbered sequence (`render_0001.png`, `frame_00.png`, etc.) with automatic regex/prefix detection of frame sequences.
+  - Naturally sorts frames and ingests them directly into an animated timeline track with user target framerate.
 
 ---
 

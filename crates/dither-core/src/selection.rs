@@ -320,6 +320,107 @@ impl SelectionBuffer {
     pub fn from_mask(mask: MaskBuffer) -> Self {
         Self { width: mask.width, height: mask.height, mask }
     }
+
+    /// Morphological dilation expanding selection boundary by `radius` pixels.
+    pub fn expand(&mut self, radius: u32) {
+        if radius == 0 {
+            return;
+        }
+        let r = radius as i32;
+        let w = self.width as i32;
+        let h = self.height as i32;
+        let mut new_data = self.mask.data.clone();
+
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) as usize;
+                if self.mask.data[idx] > 127 {
+                    for dy in -r..=r {
+                        let ny = y + dy;
+                        if ny >= 0 && ny < h {
+                            for dx in -r..=r {
+                                let nx = x + dx;
+                                if nx >= 0 && nx < w && dx * dx + dy * dy <= r * r {
+                                    new_data[(ny * w + nx) as usize] = 255;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.mask.data = new_data;
+    }
+
+    /// Morphological erosion contracting selection boundary inward by `radius` pixels.
+    pub fn contract(&mut self, radius: u32) {
+        if radius == 0 {
+            return;
+        }
+        let r = radius as i32;
+        let w = self.width as i32;
+        let h = self.height as i32;
+        let mut new_data = self.mask.data.clone();
+
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) as usize;
+                if self.mask.data[idx] > 127 {
+                    let mut keep = true;
+                    'neighbor: for dy in -r..=r {
+                        let ny = y + dy;
+                        for dx in -r..=r {
+                            if dx * dx + dy * dy <= r * r {
+                                let nx = x + dx;
+                                if nx < 0 || nx >= w || ny < 0 || ny >= h || self.mask.data[(ny * w + nx) as usize] <= 127 {
+                                    keep = false;
+                                    break 'neighbor;
+                                }
+                            }
+                        }
+                    }
+                    if !keep {
+                        new_data[idx] = 0;
+                    }
+                }
+            }
+        }
+        self.mask.data = new_data;
+    }
+
+    /// Feather selection boundaries using separable moving average blur over `radius` pixels.
+    pub fn feather(&mut self, radius: u32) {
+        if radius == 0 {
+            return;
+        }
+        let r = radius as usize;
+        let w = self.width as usize;
+        let h = self.height as usize;
+
+        // Horizontal pass
+        let mut temp = vec![0u8; w * h];
+        for y in 0..h {
+            let row_offset = y * w;
+            for x in 0..w {
+                let min_x = x.saturating_sub(r);
+                let max_x = (x + r).min(w - 1);
+                let count = (max_x - min_x + 1) as u32;
+                let sum: u32 = (min_x..=max_x).map(|ix| self.mask.data[row_offset + ix] as u32).sum();
+                temp[row_offset + x] = (sum / count) as u8;
+            }
+        }
+
+        // Vertical pass
+        for x in 0..w {
+            for y in 0..h {
+                let min_y = y.saturating_sub(r);
+                let max_y = (y + r).min(h - 1);
+                let count = (max_y - min_y + 1) as u32;
+                let sum: u32 = (min_y..=max_y).map(|iy| temp[iy * w + x] as u32).sum();
+                self.mask.data[y * w + x] = (sum / count) as u8;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

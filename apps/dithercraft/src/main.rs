@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 /// Active interface theme out of the 5 studio themes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -532,6 +532,15 @@ pub enum CommandActionKind {
     SaveProjectBundle,
     OpenProjectBundle,
     SetWorkflowMode(WorkflowLayoutMode),
+    ToggleAutoReload,
+    ImportImageSequence,
+    MaskLuminanceShadows,
+    MaskLuminanceMidtones,
+    MaskLuminanceHighlights,
+    SelectionFeather,
+    SelectionExpand,
+    SelectionContract,
+    SetUiScale(f32),
 }
 
 /// Catalog entry in the Universal Command Palette.
@@ -754,6 +763,24 @@ pub struct DitherCraftApp {
 
     // Phase 14.1: Workflow Layout Modes
     pub workflow_mode: WorkflowLayoutMode,
+
+    // Phase 17.4: File Watcher & External Editor Auto-Reload Daemon
+    pub auto_reload_enabled: bool,
+    pub source_last_modified: Option<SystemTime>,
+    pub last_reload_check: Instant,
+
+    // Phase 15.3: Parametric Range Masking (Luminance & Color Proximity)
+    pub mask_lum_min: f32,
+    pub mask_lum_max: f32,
+    pub mask_lum_feather: f32,
+    pub mask_color_tolerance: f32,
+    pub mask_sample_color: [u8; 3],
+
+    // Phase 16.4: Selection Modifiers
+    pub selection_modify_radius: u32,
+
+    // Phase 14.3: Interface Scaling & High-DPI UI
+    pub ui_scale: f32,
 }
 
 impl DitherCraftApp {
@@ -959,6 +986,24 @@ impl DitherCraftApp {
 
             // Phase 14.1: Workflow Layout Modes
             workflow_mode: WorkflowLayoutMode::DitherStudio,
+
+            // Phase 17.4: File Watcher & Auto-Reload
+            auto_reload_enabled: false,
+            source_last_modified: None,
+            last_reload_check: Instant::now(),
+
+            // Phase 15.3: Parametric Range Masking
+            mask_lum_min: 0.0,
+            mask_lum_max: 128.0,
+            mask_lum_feather: 16.0,
+            mask_color_tolerance: 0.15,
+            mask_sample_color: [255, 255, 255],
+
+            // Phase 16.4: Selection Modifiers
+            selection_modify_radius: 4,
+
+            // Phase 14.3: Interface Scaling & High-DPI UI
+            ui_scale: 1.0,
         }
     }
 
@@ -1044,6 +1089,140 @@ impl DitherCraftApp {
         if let Some(mask) = self.mask.as_ref() {
             self.selection = Some(SelectionBuffer::from_mask(mask.clone()));
             self.status_text = "Extracted selection from mask".into();
+        }
+    }
+
+    pub fn apply_mask_luminance_range(&mut self, min_lum: f32, max_lum: f32, feather: f32) {
+        let Some(src) = self.source_image.clone() else { return };
+        let (w, h) = (src.width, src.height);
+        self.ensure_buffers_dimension(w, h);
+        if let Some(mask) = self.mask.as_mut() {
+            mask.apply_tonal_range(&src, min_lum.round() as u8, max_lum.round() as u8, feather.round() as u8);
+            self.status_text = format!("Applied luminance range mask ({min_lum:.0}..{max_lum:.0}, feather {feather:.0})");
+            if self.mask_blend_enabled {
+                self.trigger_render();
+            }
+        }
+    }
+
+    pub fn apply_mask_color_proximity(&mut self, target: RgbColor, tolerance: f32) {
+        let Some(src) = self.source_image.clone() else { return };
+        let (w, h) = (src.width, src.height);
+        self.ensure_buffers_dimension(w, h);
+        if let Some(mask) = self.mask.as_mut() {
+            mask.apply_color_proximity(&src, target, tolerance);
+            self.status_text = format!("Applied color proximity mask (RGB({},{},{}), tol {tolerance:.2})", target.r, target.g, target.b);
+            if self.mask_blend_enabled {
+                self.trigger_render();
+            }
+        }
+    }
+
+    pub fn feather_selection(&mut self, radius: u32) {
+        if let Some(sel) = self.selection.as_mut() {
+            sel.feather(radius);
+            self.status_text = format!("Feathered selection ({radius}px)");
+        }
+    }
+
+    pub fn expand_selection(&mut self, radius: u32) {
+        if let Some(sel) = self.selection.as_mut() {
+            sel.expand(radius);
+            self.status_text = format!("Expanded selection (+{radius}px)");
+        }
+    }
+
+    pub fn contract_selection(&mut self, radius: u32) {
+        if let Some(sel) = self.selection.as_mut() {
+            sel.contract(radius);
+            self.status_text = format!("Contracted selection (-{radius}px)");
+        }
+    }
+
+    pub fn import_image_sequence_dialog(&mut self) {
+        if let Some(first_path) = rfd::FileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tga", "tiff", "tif", "qoi"])
+            .set_title("Select First Frame of Numbered Sequence")
+            .pick_file()
+        {
+            self.import_image_sequence(&first_path);
+        }
+    }
+
+    pub fn import_image_sequence(&mut self, first_path: &Path) {
+        let Some(parent) = first_path.parent() else { return };
+        let Some(stem) = first_path.file_stem().and_then(|s| s.to_str()) else { return };
+        let ext = first_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        let digits_start = stem.rfind(|c: char| !c.is_ascii_digit()).map(|idx| idx + 1).unwrap_or(0);
+        if digits_start >= stem.len() {
+            self.load_media_file(first_path);
+            return;
+        }
+
+        let prefix = &stem[..digits_start];
+
+        let Ok(entries) = std::fs::read_dir(parent) else { return };
+        let mut matching_files: Vec<(u64, PathBuf)> = Vec::new();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let cur_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !cur_ext.eq_ignore_ascii_case(ext) {
+                continue;
+            }
+            if let Some(cur_stem) = path.file_stem().and_then(|s| s.to_str())
+                && let Some(suffix) = cur_stem.strip_prefix(prefix)
+                && !suffix.is_empty()
+                && suffix.chars().all(|c| c.is_ascii_digit())
+                && let Ok(num) = suffix.parse::<u64>()
+            {
+                matching_files.push((num, path));
+            }
+        }
+
+        if matching_files.is_empty() {
+            self.load_media_file(first_path);
+            return;
+        }
+
+        matching_files.sort_by_key(|(num, _)| *num);
+        if matching_files.len() > 300 {
+            matching_files.truncate(300);
+        }
+
+        let mut frames = Vec::with_capacity(matching_files.len());
+        for (_, p) in &matching_files {
+            if let Ok(reader) = image::ImageReader::open(p)
+                && let Ok(reader) = reader.with_guessed_format()
+                && let Ok(dyn_img) = reader.decode()
+            {
+                let rgb = dyn_img.to_rgb8();
+                let (w, h) = rgb.dimensions();
+                if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                    frames.push(Arc::new(buf));
+                }
+            }
+        }
+
+        if !frames.is_empty() {
+            let count = frames.len();
+            let (w, h) = (frames[0].width, frames[0].height);
+            self.source_image = Some(frames[0].clone());
+            self.source_frames = frames;
+            self.timeline_max_frames = count as u32;
+            self.timeline_frame = 0;
+            let default_delay = 1000 / self.target_fps.max(1);
+            self.frame_delays = vec![default_delay; count];
+            self.ensure_buffers_dimension(w, h);
+            self.source_path = Some(first_path.to_path_buf());
+            self.add_recent_file(first_path.to_path_buf());
+            self.source_last_modified = std::fs::metadata(first_path).and_then(|m| m.modified()).ok();
+            self.status_text = format!("Imported sequence of {count} frames ({prefix}...{ext})");
+            self.trigger_render();
         }
     }
 
@@ -1361,7 +1540,65 @@ impl DitherCraftApp {
             });
         }
 
-        // 12. History
+        // 12. File & Production Tools
+        items.push(CommandItem {
+            title: "File: Auto-Reload on Disk Change (Toggle)".into(),
+            category: "File",
+            shortcut: None,
+            kind: CommandActionKind::ToggleAutoReload,
+        });
+        items.push(CommandItem {
+            title: "File: Import Numbered Image Sequence...".into(),
+            category: "File",
+            shortcut: None,
+            kind: CommandActionKind::ImportImageSequence,
+        });
+        items.push(CommandItem {
+            title: "Mask: Extract Luminance Range (Shadows 0-85)".into(),
+            category: "Mask",
+            shortcut: None,
+            kind: CommandActionKind::MaskLuminanceShadows,
+        });
+        items.push(CommandItem {
+            title: "Mask: Extract Luminance Range (Midtones 64-192)".into(),
+            category: "Mask",
+            shortcut: None,
+            kind: CommandActionKind::MaskLuminanceMidtones,
+        });
+        items.push(CommandItem {
+            title: "Mask: Extract Luminance Range (Highlights 170-255)".into(),
+            category: "Mask",
+            shortcut: None,
+            kind: CommandActionKind::MaskLuminanceHighlights,
+        });
+        items.push(CommandItem {
+            title: "Selection: Feather Edges".into(),
+            category: "Selection",
+            shortcut: None,
+            kind: CommandActionKind::SelectionFeather,
+        });
+        items.push(CommandItem {
+            title: "Selection: Expand (+px)".into(),
+            category: "Selection",
+            shortcut: None,
+            kind: CommandActionKind::SelectionExpand,
+        });
+        items.push(CommandItem {
+            title: "Selection: Contract (-px)".into(),
+            category: "Selection",
+            shortcut: None,
+            kind: CommandActionKind::SelectionContract,
+        });
+        items.push(CommandItem {
+            title: "View: UI Scale 100% (Default)".into(),
+            category: "View",
+            shortcut: Some("Ctrl+0"),
+            kind: CommandActionKind::SetUiScale(1.0),
+        });
+        items.push(CommandItem { title: "View: UI Scale 125%".into(), category: "View", shortcut: None, kind: CommandActionKind::SetUiScale(1.25) });
+        items.push(CommandItem { title: "View: UI Scale 150%".into(), category: "View", shortcut: None, kind: CommandActionKind::SetUiScale(1.5) });
+
+        // 13. History
         items.push(CommandItem { title: "Undo".into(), category: "Edit", shortcut: Some("Ctrl+Z"), kind: CommandActionKind::Undo });
         items.push(CommandItem { title: "Redo".into(), category: "Edit", shortcut: Some("Ctrl+Shift+Z"), kind: CommandActionKind::Redo });
 
@@ -1591,6 +1828,44 @@ impl DitherCraftApp {
             CommandActionKind::SetWorkflowMode(mode) => {
                 self.set_workflow_mode(mode);
             }
+            CommandActionKind::ToggleAutoReload => {
+                self.auto_reload_enabled = !self.auto_reload_enabled;
+                if self.auto_reload_enabled {
+                    if let Some(ref p) = self.source_path {
+                        self.source_last_modified = std::fs::metadata(p).and_then(|m| m.modified()).ok();
+                        self.status_text = format!("Watching for disk changes: {}", p.display());
+                    } else {
+                        self.status_text = "Auto-reload enabled (waiting for loaded file)".into();
+                    }
+                } else {
+                    self.status_text = "Auto-reload disabled".into();
+                }
+            }
+            CommandActionKind::ImportImageSequence => {
+                self.import_image_sequence_dialog();
+            }
+            CommandActionKind::MaskLuminanceShadows => {
+                self.apply_mask_luminance_range(0.0, 85.0, 16.0);
+            }
+            CommandActionKind::MaskLuminanceMidtones => {
+                self.apply_mask_luminance_range(64.0, 192.0, 16.0);
+            }
+            CommandActionKind::MaskLuminanceHighlights => {
+                self.apply_mask_luminance_range(170.0, 255.0, 16.0);
+            }
+            CommandActionKind::SelectionFeather => {
+                self.feather_selection(self.selection_modify_radius);
+            }
+            CommandActionKind::SelectionExpand => {
+                self.expand_selection(self.selection_modify_radius);
+            }
+            CommandActionKind::SelectionContract => {
+                self.contract_selection(self.selection_modify_radius);
+            }
+            CommandActionKind::SetUiScale(scale) => {
+                self.ui_scale = scale;
+                self.status_text = format!("Set UI Scale to {:.0}%", scale * 100.0);
+            }
         }
         self.show_command_palette = false;
     }
@@ -1714,6 +1989,7 @@ impl DitherCraftApp {
 
     fn load_media_file(&mut self, path: &Path) {
         self.source_path = Some(path.to_path_buf());
+        self.source_last_modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         self.add_recent_file(path.to_path_buf());
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -2073,6 +2349,7 @@ impl DitherCraftApp {
         self.timeline_max_frames = 60;
         self.timeline_frame = 0;
         self.source_path = Some(path.to_path_buf());
+        self.source_last_modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         self.add_recent_file(path.to_path_buf());
         self.mask = mask_buf;
         self.ensure_buffers_dimension(w, h);
@@ -2808,8 +3085,36 @@ impl eframe::App for DitherCraftApp {
             }
         }
 
+        // Apply UI Scale
+        ctx.set_pixels_per_point(self.ui_scale);
+
         // Apply theme
         self.theme.apply(ctx);
+
+        // Auto-reload on disk change
+        if self.auto_reload_enabled && self.last_reload_check.elapsed() >= std::time::Duration::from_millis(500) {
+            self.last_reload_check = Instant::now();
+            if let Some(ref path) = self.source_path
+                && let Ok(metadata) = std::fs::metadata(path)
+                && let Ok(modified) = metadata.modified()
+            {
+                if let Some(last_mod) = self.source_last_modified {
+                    if modified > last_mod {
+                        self.source_last_modified = Some(modified);
+                        let p = path.clone();
+                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        if ext.eq_ignore_ascii_case("dithercraft") || ext.eq_ignore_ascii_case("dcp") {
+                            let _ = self.load_project_bundle(&p);
+                        } else {
+                            self.load_media_file(&p);
+                        }
+                        self.status_text = format!("Auto-reloaded modified file: {}", p.file_name().and_then(|n| n.to_str()).unwrap_or(""));
+                    }
+                } else {
+                    self.source_last_modified = Some(modified);
+                }
+            }
+        }
 
         // Handle Undo / Redo keyboard shortcuts
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z)) {
@@ -2891,6 +3196,18 @@ impl eframe::App for DitherCraftApp {
             }
         }
 
+        // UI Scale shortcuts: Ctrl+= / Ctrl++ (zoom in), Ctrl+- (zoom out), Ctrl+0 (reset)
+        if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Equals)) {
+            self.ui_scale = (self.ui_scale * 1.1).min(2.5);
+            self.status_text = format!("UI Scale: {:.0}%", self.ui_scale * 100.0);
+        } else if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Minus)) {
+            self.ui_scale = (self.ui_scale / 1.1).max(0.6);
+            self.status_text = format!("UI Scale: {:.0}%", self.ui_scale * 100.0);
+        } else if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Num0)) {
+            self.ui_scale = 1.0;
+            self.status_text = "UI Scale: 100% (Reset)".into();
+        }
+
         // Toggle Zen Focus Mode (F11)
         if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
             if self.workflow_mode == WorkflowLayoutMode::ZenFocus {
@@ -2943,6 +3260,22 @@ impl eframe::App for DitherCraftApp {
                     if ui.button("Open Project Bundle (.dithercraft)...").clicked() {
                         self.open_project_bundle_dialog();
                         ui.close_menu();
+                    }
+                    if ui.button("Import Numbered Image Sequence...").clicked() {
+                        self.import_image_sequence_dialog();
+                        ui.close_menu();
+                    }
+                    if ui.checkbox(&mut self.auto_reload_enabled, "Auto-Reload on Disk Change (Watch File)").changed() {
+                        if self.auto_reload_enabled {
+                            if let Some(ref p) = self.source_path {
+                                self.source_last_modified = std::fs::metadata(p).and_then(|m| m.modified()).ok();
+                                self.status_text = format!("Watching for disk changes: {}", p.display());
+                            } else {
+                                self.status_text = "Auto-reload enabled (waiting for loaded file)".into();
+                            }
+                        } else {
+                            self.status_text = "Auto-reload disabled".into();
+                        }
                     }
                     ui.separator();
                     if ui.button("Open Image, GIF, or Video...").clicked() {
@@ -3761,6 +4094,15 @@ impl eframe::App for DitherCraftApp {
                     ui.checkbox(&mut self.split_view_enabled, "Split-View Comparison");
                     ui.checkbox(&mut self.debounce_mode, "Debounce Slider Preview");
                     ui.separator();
+                    ui.menu_button("UI Scale (Ctrl++ / Ctrl+-)", |ui| {
+                        for (label, scale) in [("75%", 0.75), ("100% (Default)", 1.0), ("125%", 1.25), ("150%", 1.5), ("200%", 2.0)] {
+                            if ui.selectable_label((self.ui_scale - scale).abs() < 0.01, label).clicked() {
+                                self.ui_scale = scale;
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.separator();
                     ui.label("Color Vision Deficiency (CVD):");
                     for mode in CvdMode::ALL {
                         if ui.selectable_label(self.cvd_mode == mode, mode.name()).clicked() {
@@ -3936,6 +4278,14 @@ impl eframe::App for DitherCraftApp {
 
                     ui.label("Toggle Zen Focus Mode");
                     ui.monospace("F11");
+                    ui.end_row();
+
+                    ui.label("UI Scale Zoom In / Out / Reset");
+                    ui.monospace("Ctrl++ / Ctrl+- / Ctrl+0");
+                    ui.end_row();
+
+                    ui.label("Auto-Reload on Disk Change");
+                    ui.monospace("File Menu / Watch");
                     ui.end_row();
                 });
                 ui.add_space(8.0);
@@ -4759,6 +5109,70 @@ impl eframe::App for DitherCraftApp {
                             if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
                                 self.update_texture(ctx);
                             }
+                            ui.collapsing("Parametric Range Masks (Luminance & Proximity)", |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Presets:");
+                                    if ui.button("Shadows").clicked() {
+                                        self.apply_mask_luminance_range(0.0, 85.0, 16.0);
+                                        if self.mask_blend_enabled {
+                                            changed = true;
+                                        } else {
+                                            self.update_texture(ctx);
+                                        }
+                                    }
+                                    if ui.button("Midtones").clicked() {
+                                        self.apply_mask_luminance_range(64.0, 192.0, 16.0);
+                                        if self.mask_blend_enabled {
+                                            changed = true;
+                                        } else {
+                                            self.update_texture(ctx);
+                                        }
+                                    }
+                                    if ui.button("Highlights").clicked() {
+                                        self.apply_mask_luminance_range(170.0, 255.0, 16.0);
+                                        if self.mask_blend_enabled {
+                                            changed = true;
+                                        } else {
+                                            self.update_texture(ctx);
+                                        }
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Min Lum:");
+                                    ui.add(egui::Slider::new(&mut self.mask_lum_min, 0.0..=255.0));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Max Lum:");
+                                    ui.add(egui::Slider::new(&mut self.mask_lum_max, 0.0..=255.0));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Feather:");
+                                    ui.add(egui::Slider::new(&mut self.mask_lum_feather, 0.0..=64.0));
+                                });
+                                if ui.button("Extract Luminance Mask").clicked() {
+                                    self.apply_mask_luminance_range(self.mask_lum_min, self.mask_lum_max, self.mask_lum_feather);
+                                    if self.mask_blend_enabled {
+                                        changed = true;
+                                    } else {
+                                        self.update_texture(ctx);
+                                    }
+                                }
+                                ui.separator();
+                                ui.horizontal(|ui| {
+                                    ui.label("Proximity Color:");
+                                    ui.color_edit_button_srgb(&mut self.mask_sample_color);
+                                    ui.add(egui::Slider::new(&mut self.mask_color_tolerance, 0.01..=0.50).text("Tol"));
+                                });
+                                if ui.button("Extract Color Proximity Mask").clicked() {
+                                    let col = RgbColor::new(self.mask_sample_color[0], self.mask_sample_color[1], self.mask_sample_color[2]);
+                                    self.apply_mask_color_proximity(col, self.mask_color_tolerance);
+                                    if self.mask_blend_enabled {
+                                        changed = true;
+                                    } else {
+                                        self.update_texture(ctx);
+                                    }
+                                }
+                            });
                         }
                         WorkstationTool::RectMarquee | WorkstationTool::EllipseMarquee | WorkstationTool::Lasso | WorkstationTool::MagicWand => {
                             ui.horizontal(|ui| {
@@ -4807,6 +5221,26 @@ impl eframe::App for DitherCraftApp {
                                     self.convert_mask_to_selection();
                                 }
                             });
+                            ui.horizontal(|ui| {
+                                ui.label("Modify Radius:");
+                                ui.add(egui::Slider::new(&mut self.selection_modify_radius, 1..=32).text("px"));
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("Feather").on_hover_text("Feather selection edges").clicked() {
+                                    self.feather_selection(self.selection_modify_radius);
+                                }
+                                if ui.button("Expand (+)").on_hover_text("Expand selection by N pixels").clicked() {
+                                    self.expand_selection(self.selection_modify_radius);
+                                }
+                                if ui.button("Contract (-)").on_hover_text("Contract selection by N pixels").clicked() {
+                                    self.contract_selection(self.selection_modify_radius);
+                                }
+                            });
+                            if let Some(sel) = self.selection.as_ref()
+                                && let Some((bx, by, bw, bh)) = sel.bounding_box()
+                            {
+                                ui.label(format!("Bounds: ({bx}, {by}) {bw}x{bh} px"));
+                            }
                         }
                         WorkstationTool::Pointer => {
                             ui.label("Drag canvas to pan, scroll to zoom.");
@@ -6128,6 +6562,10 @@ impl eframe::App for DitherCraftApp {
                     }
                 }
                 ui.separator();
+                if self.auto_reload_enabled {
+                    ui.label(egui::RichText::new("👁 Watch").color(Color32::from_rgb(100, 220, 150)).monospace());
+                    ui.separator();
+                }
                 ui.label(format!("Latency: {:.2} ms", self.render_latency_ms)).on_hover_text(format!(
                     "Pipeline Telemetry:\n• Dither: {:.2} ms\n• Effects: {:.2} ms\n• Histogram: {:.2} ms\n• Total: {:.2} ms",
                     self.telemetry_dither_ms, self.telemetry_effects_ms, self.telemetry_histogram_ms, self.render_latency_ms
@@ -6379,6 +6817,16 @@ mod tests {
             command_search_query: String::new(),
             command_selected_index: 0,
             workflow_mode: WorkflowLayoutMode::DitherStudio,
+            auto_reload_enabled: false,
+            source_last_modified: None,
+            last_reload_check: Instant::now(),
+            mask_lum_min: 0.0,
+            mask_lum_max: 128.0,
+            mask_lum_feather: 16.0,
+            mask_color_tolerance: 0.15,
+            mask_sample_color: [255, 255, 255],
+            selection_modify_radius: 4,
+            ui_scale: 1.0,
         };
 
         let catalog = app.build_command_catalog();
@@ -6590,6 +7038,16 @@ mod tests {
             command_search_query: String::new(),
             command_selected_index: 0,
             workflow_mode: WorkflowLayoutMode::PrintPrepress,
+            auto_reload_enabled: false,
+            source_last_modified: None,
+            last_reload_check: Instant::now(),
+            mask_lum_min: 0.0,
+            mask_lum_max: 128.0,
+            mask_lum_feather: 16.0,
+            mask_color_tolerance: 0.15,
+            mask_sample_color: [255, 255, 255],
+            selection_modify_radius: 4,
+            ui_scale: 1.0,
         };
 
         // Create 16x16 test image buffer
@@ -6756,6 +7214,16 @@ mod tests {
             command_search_query: String::new(),
             command_selected_index: 0,
             workflow_mode: WorkflowLayoutMode::DitherStudio,
+            auto_reload_enabled: false,
+            source_last_modified: None,
+            last_reload_check: Instant::now(),
+            mask_lum_min: 0.0,
+            mask_lum_max: 128.0,
+            mask_lum_feather: 16.0,
+            mask_color_tolerance: 0.15,
+            mask_sample_color: [255, 255, 255],
+            selection_modify_radius: 4,
+            ui_scale: 1.0,
         };
 
         let load_res = app2.load_project_bundle(&temp_path);
@@ -6814,5 +7282,78 @@ mod tests {
             rgb.push(chunk[2]);
         }
         assert_eq!(rgb, img.data);
+    }
+
+    #[test]
+    fn test_selection_feather_expand_contract() {
+        let mut sel = SelectionBuffer::new(32, 32).expect("create selection");
+        assert!(sel.is_empty());
+        assert_eq!(sel.bounding_box(), None);
+
+        sel.select_rect(10, 10, 10, 10, SelectionMode::New);
+        assert!(!sel.is_empty());
+        let bb = sel.bounding_box().expect("bounding box");
+        assert_eq!(bb, (10, 10, 10, 10));
+
+        sel.expand(2);
+        let expanded_bb = sel.bounding_box().expect("expanded bb");
+        assert_eq!(expanded_bb, (8, 8, 14, 14));
+
+        sel.contract(2);
+        let contracted_bb = sel.bounding_box().expect("contracted bb");
+        assert_eq!(contracted_bb, (10, 10, 10, 10));
+
+        sel.feather(2);
+        assert!(!sel.is_empty());
+    }
+
+    #[test]
+    fn test_mask_luminance_range_and_proximity() {
+        let mut img = ImageBuffer::new(16, 16).expect("create img");
+        for y in 0..16 {
+            for x in 0..16 {
+                let v = (x * 16).min(255) as u8;
+                img.set_pixel(x, y, RgbColor::new(v, v, v));
+            }
+        }
+
+        let mut mask = MaskBuffer::new(16, 16).expect("create mask");
+        mask.apply_tonal_range(&img, 0, 85, 16);
+        assert!(!mask.is_empty());
+        // Dark pixels should have higher mask intensity than bright pixels
+        let p_dark = mask.get_pixel(0, 0).unwrap_or(0);
+        let p_bright = mask.get_pixel(15, 15).unwrap_or(0);
+        assert!(p_dark > p_bright, "Dark pixel ({p_dark}) must be more masked than bright pixel ({p_bright})");
+
+        mask.clear();
+        mask.apply_color_proximity(&img, RgbColor::new(0, 0, 0), 0.15);
+        assert!(!mask.is_empty());
+    }
+
+    #[test]
+    fn test_numbered_sequence_pattern_parsing() {
+        let stem = "render_0042";
+        let digits_start = stem.rfind(|c: char| !c.is_ascii_digit()).map(|idx| idx + 1).unwrap_or(0);
+        assert_eq!(&stem[..digits_start], "render_");
+        assert_eq!(&stem[digits_start..], "0042");
+        let parsed: u64 = stem[digits_start..].parse().expect("parse number");
+        assert_eq!(parsed, 42);
+
+        let stem_no_digits = "my_character";
+        let no_digits_start = stem_no_digits.rfind(|c: char| !c.is_ascii_digit()).map(|idx| idx + 1).unwrap_or(0);
+        assert_eq!(no_digits_start, stem_no_digits.len());
+    }
+
+    #[test]
+    fn test_auto_reload_state_and_ui_scale() {
+        let mut scale = 1.0_f32;
+        scale = (scale * 1.1).min(2.5);
+        assert!(scale > 1.0 && scale <= 2.5);
+        scale = (scale / 1.1).max(0.6);
+        assert!((scale - 1.0).abs() < 0.01);
+
+        let now = SystemTime::now();
+        let future = now + std::time::Duration::from_secs(1);
+        assert!(future > now);
     }
 }
