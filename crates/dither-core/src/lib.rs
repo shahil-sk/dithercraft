@@ -57,6 +57,6 @@ pub use temporal::{
 };
 pub use vector::{
     BlackVectorIsolation, CubicBezierSegment, GCodeConfig, GCodeExporter, HatchStyle, MultiColorSvgSeparation, Point2D, SpotColorPlateSeparation,
-    ToolpathStroke, export_smooth_bezier_svg, fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
+    SvgRasterizer, ToolpathStroke, export_smooth_bezier_svg, fit_cubic_spline, rdp_simplify, spline_to_svg_path, visvalingam_simplify,
 };
 pub use video::{Mp4Demuxer, Mp4Sample, Mp4Track, VideoCodec, WebmDemuxer, WebmSample, WebmTrack, WebpAnimFrame, WebpAnimationMuxer};

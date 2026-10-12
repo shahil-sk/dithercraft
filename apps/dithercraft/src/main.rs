@@ -11,8 +11,11 @@ use dither_core::{
     palette::{ColorMetric, Palette, Swatch},
     selection::{SelectionBuffer, SelectionMode},
     temporal::{TemporalCoherenceConfig, TemporalCoherenceFilter, TemporalNoisePattern, render_onion_skin},
-    vector::{BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, SpotColorPlateSeparation, export_smooth_bezier_svg},
+    vector::{
+        BlackVectorIsolation, GCodeConfig, GCodeExporter, MultiColorSvgSeparation, SpotColorPlateSeparation, SvgRasterizer, export_smooth_bezier_svg,
+    },
 };
+
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::{AnimationDecoder, Frame, RgbaImage};
@@ -541,6 +544,27 @@ pub enum CommandActionKind {
     SelectionExpand,
     SelectionContract,
     SetUiScale(f32),
+    TogglePixelRulers,
+    ToggleGuideLines,
+    AddCenterGuides,
+    ClearGuides,
+    BrowsePresetsVisually,
+}
+
+/// Result of asynchronous background media decoding.
+pub struct LoadedMedia {
+    pub path: PathBuf,
+    pub frames: Vec<Arc<ImageBuffer>>,
+    pub frame_delays: Vec<u32>,
+    pub desc: String,
+    pub modified_time: Option<SystemTime>,
+}
+
+/// Active task monitoring background media decoding.
+pub struct MediaLoadTask {
+    pub path: PathBuf,
+    pub filename: String,
+    pub rx: Receiver<Result<LoadedMedia, String>>,
 }
 
 /// Catalog entry in the Universal Command Palette.
@@ -781,6 +805,25 @@ pub struct DitherCraftApp {
 
     // Phase 14.3: Interface Scaling & High-DPI UI
     pub ui_scale: f32,
+
+    // Phase 17.1 & 17.2: Asynchronous Media Ingestion & File Pipeline
+    pub pending_media_load: Option<MediaLoadTask>,
+    pub is_loading_media: bool,
+    pub loading_media_filename: String,
+
+    // Phase 8.8: Viewport Pixel Rulers & Alignment Guides
+    pub show_rulers: bool,
+    pub show_guides: bool,
+    pub h_guides: Vec<f32>,
+    pub v_guides: Vec<f32>,
+
+    // Phase 8.7: Visual Preset Browser Modal
+    pub show_preset_browser_modal: bool,
+    pub preset_browser_search: String,
+    pub preset_browser_category: String,
+
+    // Phase 14.5: Keymap Profile Configuration
+    pub keymap_profile: String,
 }
 
 impl DitherCraftApp {
@@ -1004,6 +1047,25 @@ impl DitherCraftApp {
 
             // Phase 14.3: Interface Scaling & High-DPI UI
             ui_scale: 1.0,
+
+            // Phase 17.1 & 17.2: Asynchronous Media Ingestion & File Pipeline
+            pending_media_load: None,
+            is_loading_media: false,
+            loading_media_filename: String::new(),
+
+            // Phase 8.8: Viewport Pixel Rulers & Alignment Guides
+            show_rulers: true,
+            show_guides: true,
+            h_guides: Vec::new(),
+            v_guides: Vec::new(),
+
+            // Phase 8.7: Visual Preset Browser Modal
+            show_preset_browser_modal: false,
+            preset_browser_search: String::new(),
+            preset_browser_category: "All".into(),
+
+            // Phase 14.5: Keymap Profile Configuration
+            keymap_profile: "DitherCraft Native".into(),
         }
     }
 
@@ -1602,6 +1664,38 @@ impl DitherCraftApp {
         items.push(CommandItem { title: "Undo".into(), category: "Edit", shortcut: Some("Ctrl+Z"), kind: CommandActionKind::Undo });
         items.push(CommandItem { title: "Redo".into(), category: "Edit", shortcut: Some("Ctrl+Shift+Z"), kind: CommandActionKind::Redo });
 
+        // 14. Viewport Rulers, Guides & Visual Preset Browser
+        items.push(CommandItem {
+            title: "View: Toggle Pixel Rulers".into(),
+            category: "View",
+            shortcut: Some("Ctrl+R"),
+            kind: CommandActionKind::TogglePixelRulers,
+        });
+        items.push(CommandItem {
+            title: "View: Toggle Guide Lines".into(),
+            category: "View",
+            shortcut: Some("Ctrl+;"),
+            kind: CommandActionKind::ToggleGuideLines,
+        });
+        items.push(CommandItem {
+            title: "View: Add Center Alignment Guides".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::AddCenterGuides,
+        });
+        items.push(CommandItem {
+            title: "View: Clear All Guide Lines".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::ClearGuides,
+        });
+        items.push(CommandItem {
+            title: "Presets: Browse Presets Visually...".into(),
+            category: "Presets",
+            shortcut: Some("Ctrl+Shift+P"),
+            kind: CommandActionKind::BrowsePresetsVisually,
+        });
+
         items
     }
 
@@ -1866,7 +1960,32 @@ impl DitherCraftApp {
                 self.ui_scale = scale;
                 self.status_text = format!("Set UI Scale to {:.0}%", scale * 100.0);
             }
+            CommandActionKind::TogglePixelRulers => {
+                self.show_rulers = !self.show_rulers;
+                self.status_text = format!("Pixel Rulers: {}", if self.show_rulers { "ON" } else { "OFF" });
+            }
+            CommandActionKind::ToggleGuideLines => {
+                self.show_guides = !self.show_guides;
+                self.status_text = format!("Guide Lines: {}", if self.show_guides { "ON" } else { "OFF" });
+            }
+            CommandActionKind::AddCenterGuides => {
+                if let Some(src) = &self.source_image {
+                    self.v_guides.push(src.width as f32 * 0.5);
+                    self.h_guides.push(src.height as f32 * 0.5);
+                    self.show_guides = true;
+                    self.status_text = "Added center alignment guides".into();
+                }
+            }
+            CommandActionKind::ClearGuides => {
+                self.v_guides.clear();
+                self.h_guides.clear();
+                self.status_text = "Cleared all guide lines".into();
+            }
+            CommandActionKind::BrowsePresetsVisually => {
+                self.show_preset_browser_modal = true;
+            }
         }
+
         self.show_command_palette = false;
     }
 
@@ -1987,97 +2106,101 @@ impl DitherCraftApp {
         }
     }
 
-    fn load_media_file(&mut self, path: &Path) {
+    pub fn load_media_file(&mut self, path: &Path) {
         self.source_path = Some(path.to_path_buf());
         self.source_last_modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         self.add_recent_file(path.to_path_buf());
 
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("media").to_string();
+        self.status_text = format!("Loading {}...", filename);
+        self.is_loading_media = true;
+        self.loading_media_filename = filename.clone();
+
+        let (tx, rx) = channel();
+        let path_buf = path.to_path_buf();
+
+        std::thread::spawn(move || {
+            let res = Self::decode_media_worker(&path_buf);
+            let _ = tx.send(res);
+        });
+
+        self.pending_media_load = Some(MediaLoadTask { path: path.to_path_buf(), filename, rx });
+    }
+
+    /// Background worker function to decode arbitrary media (MP4, WebM, GIF, SVG, PNG, JPEG, WebP, etc.)
+    pub fn decode_media_worker(path: &Path) -> Result<LoadedMedia, String> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let is_gif = ext.eq_ignore_ascii_case("gif");
         let is_mp4 = ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("m4v");
         let is_webm = ext.eq_ignore_ascii_case("webm") || ext.eq_ignore_ascii_case("mkv");
+        let is_svg = ext.eq_ignore_ascii_case("svg");
+        let modified_time = std::fs::metadata(path).and_then(|m| m.modified()).ok();
 
-        if is_mp4 && let Ok(bytes) = std::fs::read(path) {
-            if let Ok(demuxer) = Mp4Demuxer::parse(&bytes)
-                && let Some(track) = demuxer.primary_video_track()
-            {
-                let mut frames = Vec::new();
-                for sample in &track.samples {
-                    if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
-                        && let Ok(dyn_img) = image::load_from_memory(s_bytes)
-                    {
-                        let rgb = dyn_img.to_rgb8();
-                        let (w, h) = rgb.dimensions();
-                        if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
-                            frames.push(Arc::new(buf));
-                            if frames.len() >= 300 {
-                                break;
-                            }
+        if is_mp4 {
+            let bytes = std::fs::read(path).map_err(|e| format!("Failed to read MP4: {e}"))?;
+            let demuxer = Mp4Demuxer::parse(&bytes).map_err(|e| format!("Failed to demux MP4: {e}"))?;
+            let track = demuxer.primary_video_track().ok_or_else(|| "No video track found in MP4".to_string())?;
+            let mut frames = Vec::new();
+            for sample in &track.samples {
+                if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
+                    && let Ok(dyn_img) = image::load_from_memory(s_bytes)
+                {
+                    let rgb = dyn_img.to_rgb8();
+                    let (w, h) = rgb.dimensions();
+                    if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                        frames.push(Arc::new(buf));
+                        if frames.len() >= 300 {
+                            break;
                         }
                     }
                 }
-                if !frames.is_empty() {
-                    self.timeline_max_frames = frames.len() as u32;
-                    self.timeline_frame = 0;
-                    self.source_image = Some(frames[0].clone());
-                    self.source_frames = frames;
-                    let delay = (1000.0 / track.nominal_fps().max(1.0)) as u32;
-                    self.frame_delays = vec![delay; self.timeline_max_frames as usize];
-                    self.canvas_pan = egui::Vec2::ZERO;
-                    self.canvas_zoom = 1.0;
-                    self.status_text = format!("Loaded MP4 video ({} frames, {:.1} FPS)", self.source_frames.len(), track.nominal_fps());
-                    self.trigger_render();
-                } else {
-                    self.status_text = format!(
-                        "Parsed MP4 track: {}x{}, codec: {}, {} samples",
-                        track.width,
-                        track.height,
-                        track.codec.as_str(),
-                        track.samples.len()
-                    );
-                }
             }
-        } else if is_webm && let Ok(bytes) = std::fs::read(path) {
-            if let Ok(demuxer) = WebmDemuxer::parse(&bytes)
-                && let Some(track) = demuxer.primary_video_track()
-            {
-                let mut frames = Vec::new();
-                for sample in &track.samples {
-                    if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
-                        && let Ok(dyn_img) = image::load_from_memory(s_bytes)
-                    {
-                        let rgb = dyn_img.to_rgb8();
-                        let (w, h) = rgb.dimensions();
-                        if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
-                            frames.push(Arc::new(buf));
-                            if frames.len() >= 300 {
-                                break;
-                            }
+            if frames.is_empty() {
+                return Err("No decodable frames found in MP4 track".into());
+            }
+            let fps = track.nominal_fps().max(1.0);
+            let delay = (1000.0 / fps) as u32;
+            let delays = vec![delay; frames.len()];
+            let desc = format!("MP4 Video ({} frames, {:.1} FPS)", frames.len(), fps);
+            return Ok(LoadedMedia { path: path.to_path_buf(), frames, frame_delays: delays, desc, modified_time });
+        }
+
+        if is_webm {
+            let bytes = std::fs::read(path).map_err(|e| format!("Failed to read WebM: {e}"))?;
+            let demuxer = WebmDemuxer::parse(&bytes).map_err(|e| format!("Failed to demux WebM: {e}"))?;
+            let track = demuxer.primary_video_track().ok_or_else(|| "No video track found in WebM".to_string())?;
+            let mut frames = Vec::new();
+            for sample in &track.samples {
+                if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
+                    && let Ok(dyn_img) = image::load_from_memory(s_bytes)
+                {
+                    let rgb = dyn_img.to_rgb8();
+                    let (w, h) = rgb.dimensions();
+                    if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                        frames.push(Arc::new(buf));
+                        if frames.len() >= 300 {
+                            break;
                         }
                     }
                 }
-                if !frames.is_empty() {
-                    self.timeline_max_frames = frames.len() as u32;
-                    self.timeline_frame = 0;
-                    self.source_image = Some(frames[0].clone());
-                    self.source_frames = frames;
-                    let delay = (1000.0 / track.nominal_fps().max(1.0)) as u32;
-                    self.frame_delays = vec![delay; self.timeline_max_frames as usize];
-                    self.canvas_pan = egui::Vec2::ZERO;
-                    self.canvas_zoom = 1.0;
-                    self.status_text = format!("Loaded WebM video ({} frames, {:.1} FPS)", self.source_frames.len(), track.nominal_fps());
-                    self.trigger_render();
-                } else {
-                    self.status_text =
-                        format!("Parsed WebM track: {}x{}, codec: {}, {} blocks", track.width, track.height, track.codec_id, track.samples.len());
-                }
             }
-        } else if is_gif
-            && let Ok(file) = std::fs::File::open(path)
-            && let Ok(decoder) = GifDecoder::new(std::io::BufReader::new(file))
-            && let Ok(mut raw_frames) = decoder.into_frames().collect_frames()
-            && !raw_frames.is_empty()
-        {
+            if frames.is_empty() {
+                return Err("No decodable frames found in WebM track".into());
+            }
+            let fps = track.nominal_fps().max(1.0);
+            let delay = (1000.0 / fps) as u32;
+            let delays = vec![delay; frames.len()];
+            let desc = format!("WebM Video ({} frames, {:.1} FPS)", frames.len(), fps);
+            return Ok(LoadedMedia { path: path.to_path_buf(), frames, frame_delays: delays, desc, modified_time });
+        }
+
+        if is_gif {
+            let file = std::fs::File::open(path).map_err(|e| format!("Failed to open GIF: {e}"))?;
+            let decoder = GifDecoder::new(std::io::BufReader::new(file)).map_err(|e| format!("Failed to parse GIF: {e}"))?;
+            let mut raw_frames = decoder.into_frames().collect_frames().map_err(|e| format!("Failed to collect GIF frames: {e}"))?;
+            if raw_frames.is_empty() {
+                return Err("GIF contains zero frames".into());
+            }
             if raw_frames.len() > 300 {
                 raw_frames.truncate(300);
             }
@@ -2101,41 +2224,38 @@ impl DitherCraftApp {
                     delays.push(delay_ms);
                 }
             }
-            if !frames.is_empty() {
-                self.timeline_max_frames = frames.len() as u32;
-                self.timeline_frame = 0;
-                self.source_image = Some(frames[0].clone());
-                self.source_frames = frames;
-                self.frame_delays = delays;
-                self.canvas_pan = egui::Vec2::ZERO;
-                self.canvas_zoom = 1.0;
-                self.status_text = format!("Loaded animated GIF ({} frames)", self.source_frames.len());
-                self.trigger_render();
+            if frames.is_empty() {
+                return Err("GIF frames exceeded allocation safety limits".into());
             }
-        } else if ext.eq_ignore_ascii_case("svg")
-            && let Ok(data) = std::fs::read_to_string(path)
-        {
-            self.status_text = format!("Loaded SVG vector file ({} bytes)", data.len());
-        } else if let Ok(reader) = image::ImageReader::open(path)
-            && let Ok(reader) = reader.with_guessed_format()
-            && let Ok(dyn_img) = reader.decode()
-        {
-            let rgb = dyn_img.to_rgb8();
-            let (w, h) = rgb.dimensions();
-            if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
-                let arc_buf = Arc::new(buf);
-                self.source_image = Some(arc_buf.clone());
-                self.source_frames = vec![arc_buf];
-                self.frame_delays = vec![100];
-                self.timeline_max_frames = 60;
-                self.timeline_frame = 0;
-                self.canvas_pan = egui::Vec2::ZERO;
-                self.canvas_zoom = 1.0;
-                self.status_text = format!("Loaded static image ({w}x{h})");
-                self.ensure_buffers_dimension(w, h);
-                self.trigger_render();
-            }
+            let desc = format!("Animated GIF ({} frames)", frames.len());
+            return Ok(LoadedMedia { path: path.to_path_buf(), frames, frame_delays: delays, desc, modified_time });
         }
+
+        if is_svg {
+            let text = std::fs::read_to_string(path).map_err(|e| format!("Failed to read SVG file: {e}"))?;
+            let rasterizer = SvgRasterizer::default();
+            let buf = rasterizer.rasterize(&text).map_err(|e| format!("Failed to rasterize SVG: {e:?}"))?;
+            let (w, h) = (buf.width, buf.height);
+            let arc_buf = Arc::new(buf);
+            return Ok(LoadedMedia {
+                path: path.to_path_buf(),
+                frames: vec![arc_buf],
+                frame_delays: vec![100],
+                desc: format!("SVG Vector ({w}x{h})"),
+                modified_time,
+            });
+        }
+
+        let reader = image::ImageReader::open(path)
+            .map_err(|e| format!("Failed to open image: {e}"))?
+            .with_guessed_format()
+            .map_err(|e| format!("Failed to guess format: {e}"))?;
+        let dyn_img = reader.decode().map_err(|e| format!("Failed to decode image: {e}"))?;
+        let rgb = dyn_img.to_rgb8();
+        let (w, h) = rgb.dimensions();
+        let buf = ImageBuffer::from_raw(w, h, rgb.into_raw()).map_err(|e| format!("Failed to create buffer: {e:?}"))?;
+        let desc = format!("Static Image ({w}x{h})");
+        Ok(LoadedMedia { path: path.to_path_buf(), frames: vec![Arc::new(buf)], frame_delays: vec![100], desc, modified_time })
     }
 
     /// Copy the rendered output buffer (converted to 32-bit RGBA) directly to the OS system clipboard.
@@ -2504,6 +2624,26 @@ impl DitherCraftApp {
                 self.trigger_render();
                 return;
             }
+        }
+
+        if ext.eq_ignore_ascii_case("svg")
+            && let Ok(text) = std::str::from_utf8(bytes)
+            && let Ok(buf) = SvgRasterizer::default().rasterize(text)
+        {
+            let (w, h) = (buf.width, buf.height);
+            let arc_buf = Arc::new(buf);
+            self.source_image = Some(arc_buf.clone());
+            self.source_frames = vec![arc_buf];
+            self.frame_delays = vec![100];
+            self.timeline_max_frames = 60;
+            self.timeline_frame = 0;
+            self.source_path = None;
+            self.canvas_pan = egui::Vec2::ZERO;
+            self.canvas_zoom = 1.0_f32;
+            self.ensure_buffers_dimension(w, h);
+            self.status_text = format!("Loaded dropped SVG '{filename}' ({w}x{h})");
+            self.trigger_render();
+            return;
         }
 
         if let Ok(dyn_img) = image::load_from_memory(bytes) {
@@ -3085,6 +3225,43 @@ impl eframe::App for DitherCraftApp {
             }
         }
 
+        // Poll asynchronous media loader
+        if let Some(task) = self.pending_media_load.as_ref() {
+            match task.rx.try_recv() {
+                Ok(Ok(loaded)) => {
+                    let w = loaded.frames.first().map(|f| f.width).unwrap_or(256);
+                    let h = loaded.frames.first().map(|f| f.height).unwrap_or(256);
+                    self.source_path = Some(loaded.path.clone());
+                    self.source_last_modified = loaded.modified_time;
+                    self.timeline_max_frames = loaded.frames.len() as u32;
+                    self.timeline_frame = 0;
+                    self.source_image = loaded.frames.first().cloned();
+                    self.source_frames = loaded.frames;
+                    self.frame_delays = loaded.frame_delays;
+                    self.canvas_pan = egui::Vec2::ZERO;
+                    self.canvas_zoom = 1.0;
+                    self.ensure_buffers_dimension(w, h);
+                    self.status_text = format!("Loaded {} ({})", loaded.desc, loaded.path.file_name().and_then(|f| f.to_str()).unwrap_or(""));
+                    self.trigger_render();
+                    self.is_loading_media = false;
+                    self.pending_media_load = None;
+                }
+                Ok(Err(err)) => {
+                    self.status_text = format!("Failed to load media: {err}");
+                    self.is_loading_media = false;
+                    self.pending_media_load = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.status_text = "Media loader worker disconnected".into();
+                    self.is_loading_media = false;
+                    self.pending_media_load = None;
+                }
+            }
+        }
+
         // Apply UI Scale
         ctx.set_pixels_per_point(self.ui_scale);
 
@@ -3229,6 +3406,23 @@ impl eframe::App for DitherCraftApp {
                 self.command_search_query.clear();
                 self.command_selected_index = 0;
             }
+        }
+
+        // Toggle Pixel Rulers (Ctrl+R)
+        if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && !i.modifiers.shift && i.key_pressed(egui::Key::R)) {
+            self.show_rulers = !self.show_rulers;
+            self.status_text = format!("Pixel Rulers: {}", if self.show_rulers { "ON" } else { "OFF" });
+        }
+
+        // Toggle Guide Lines (Ctrl+; / Semicolon)
+        if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Semicolon)) {
+            self.show_guides = !self.show_guides;
+            self.status_text = format!("Guide Lines: {}", if self.show_guides { "ON" } else { "OFF" });
+        }
+
+        // Toggle Visual Preset Browser (Ctrl+Shift+P)
+        if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.modifiers.shift && i.key_pressed(egui::Key::P)) {
+            self.show_preset_browser_modal = !self.show_preset_browser_modal;
         }
 
         // Handle Drag & Drop Router
@@ -4009,6 +4203,10 @@ impl eframe::App for DitherCraftApp {
                 });
 
                 ui.menu_button("Presets", |ui| {
+                    if ui.button("🎨 Visual Preset Browser (Ctrl+Shift+P)...").clicked() {
+                        self.show_preset_browser_modal = true;
+                        ui.close_menu();
+                    }
                     if ui.button("🖼 Visual Preset Gallery...").clicked() {
                         self.show_preset_gallery = true;
                         ui.close_menu();
@@ -4088,6 +4286,22 @@ impl eframe::App for DitherCraftApp {
                 });
 
                 ui.menu_button("View", |ui| {
+                    ui.checkbox(&mut self.show_rulers, "Pixel Rulers (Ctrl+R)");
+                    ui.checkbox(&mut self.show_guides, "Guide Lines (Ctrl+;)");
+                    if ui.button("Add Center Guides").clicked() {
+                        if let Some(src) = &self.source_image {
+                            self.v_guides.push(src.width as f32 * 0.5);
+                            self.h_guides.push(src.height as f32 * 0.5);
+                            self.show_guides = true;
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Clear All Guides").clicked() {
+                        self.v_guides.clear();
+                        self.h_guides.clear();
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     ui.checkbox(&mut self.show_telemetry_hud, "Pipeline Telemetry HUD");
                     ui.checkbox(&mut self.show_loupe, "Pixel Magnifier Loupe (L)");
                     ui.checkbox(&mut self.show_pixel_grid, "Pixel Grid (>=800%)");
@@ -4122,6 +4336,16 @@ impl eframe::App for DitherCraftApp {
                         self.show_shortcuts_dialog = true;
                         ui.close_menu();
                     }
+                    ui.menu_button(format!("Keymap Profile: {}", self.keymap_profile), |ui| {
+                        for profile in ["DitherCraft Native", "Raster Studio Emulation", "Aseprite Pixel Art", "Blender 3D"] {
+                            if ui.selectable_label(self.keymap_profile == profile, profile).clicked() {
+                                self.keymap_profile = profile.to_string();
+                                self.status_text = format!("Switched keymap profile to {profile}");
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.separator();
                     if ui.button("About DitherCraft...").clicked() {
                         self.show_about = true;
                         ui.close_menu();
@@ -4287,6 +4511,18 @@ impl eframe::App for DitherCraftApp {
                     ui.label("Auto-Reload on Disk Change");
                     ui.monospace("File Menu / Watch");
                     ui.end_row();
+
+                    ui.label("Toggle Pixel Rulers");
+                    ui.monospace("Ctrl+R");
+                    ui.end_row();
+
+                    ui.label("Toggle Alignment Guides");
+                    ui.monospace("Ctrl+;");
+                    ui.end_row();
+
+                    ui.label("Browse Presets Visually");
+                    ui.monospace("Ctrl+Shift+P");
+                    ui.end_row();
                 });
                 ui.add_space(8.0);
                 if ui.button("Close").clicked() {
@@ -4297,6 +4533,136 @@ impl eframe::App for DitherCraftApp {
                 is_open = false;
             }
             self.show_shortcuts_dialog = is_open;
+        }
+
+        // Phase 8.7: Visual Preset Browser Modal Dialog
+        if self.show_preset_browser_modal {
+            let mut is_open = true;
+            let mut preset_to_apply: Option<StudioPreset> = None;
+
+            egui::Window::new("🎨 Visual Preset Browser").collapsible(false).resizable(true).default_size([740.0, 520.0]).open(&mut is_open).show(
+                ctx,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("🔍 Search Presets:");
+                        ui.text_edit_singleline(&mut self.preset_browser_search);
+                        if !self.preset_browser_search.is_empty() && ui.small_button("Clear").clicked() {
+                            self.preset_browser_search.clear();
+                        }
+                    });
+
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Category:");
+                        for cat in ["All", "Vintage Hardware", "Cyberpunk & CRT", "Monochrome & Print", "Video & VHS"] {
+                            if ui.selectable_label(self.preset_browser_category == cat, cat).clicked() {
+                                self.preset_browser_category = cat.to_string();
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    let query = self.preset_browser_search.to_lowercase();
+                    let category_filter = self.preset_browser_category.as_str();
+
+                    let all_presets = StudioPreset::bundled_presets();
+                    let filtered: Vec<_> = all_presets
+                        .into_iter()
+                        .filter(|p| {
+                            let matches_query = query.is_empty()
+                                || p.name.to_lowercase().contains(&query)
+                                || p.algo.to_lowercase().contains(&query)
+                                || p.palette_name.to_lowercase().contains(&query);
+
+                            let matches_cat = match category_filter {
+                                "All" => true,
+                                "Vintage Hardware" => {
+                                    p.name.contains("Game Boy")
+                                        || p.name.contains("CGA")
+                                        || p.name.contains("Macintosh")
+                                        || p.name.contains("NES")
+                                        || p.name.contains("C64")
+                                        || p.name.contains("Amiga")
+                                        || p.name.contains("Atari")
+                                }
+                                "Cyberpunk & CRT" => p.crt_enabled || p.glow_enabled || p.name.contains("Cyberpunk") || p.name.contains("Neon"),
+                                "Monochrome & Print" => {
+                                    p.name.contains("Newspaper")
+                                        || p.name.contains("Thermal")
+                                        || p.name.contains("1-Bit")
+                                        || p.name.contains("Print")
+                                        || p.palette_name.contains("1-bit")
+                                }
+                                "Video & VHS" => p.name.contains("VHS") || p.temporal_enabled || p.glitch_enabled,
+                                _ => true,
+                            };
+
+                            matches_query && matches_cat
+                        })
+                        .collect();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for p in filtered {
+                                egui::Frame::group(ui.style()).show(ui, |ui| {
+                                    ui.set_width(225.0);
+                                    ui.vertical(|ui| {
+                                        ui.heading(&p.name);
+                                        ui.label(format!("Algorithm: {}", p.algo));
+                                        ui.label(format!("Palette: {}", p.palette_name));
+
+                                        // Render color swatch chips
+                                        let pal = Palette::from_name(&p.palette_name);
+                                        ui.horizontal(|ui| {
+                                            for sw in pal.swatches.iter().take(8) {
+                                                let (r, g, b) = (sw.color.r, sw.color.g, sw.color.b);
+                                                let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                                                ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(r, g, b));
+                                            }
+                                            if pal.swatches.len() > 8 {
+                                                ui.label(format!("+{}", pal.swatches.len() - 8));
+                                            }
+                                        });
+
+                                        ui.add_space(2.0);
+                                        // Feature badges
+                                        ui.horizontal(|ui| {
+                                            if p.crt_enabled {
+                                                ui.colored_label(Color32::from_rgb(0, 220, 255), "[CRT]");
+                                            }
+                                            if p.glow_enabled {
+                                                ui.colored_label(Color32::from_rgb(255, 180, 50), "[Glow]");
+                                            }
+                                            if p.lut_enabled {
+                                                ui.colored_label(Color32::from_rgb(180, 100, 255), "[LUT]");
+                                            }
+                                            if p.glitch_enabled {
+                                                ui.colored_label(Color32::from_rgb(255, 80, 80), "[Glitch]");
+                                            }
+                                        });
+
+                                        ui.add_space(4.0);
+                                        if ui.button("▶ Apply Preset").clicked() {
+                                            preset_to_apply = Some(p.clone());
+                                        }
+                                    });
+                                });
+                            }
+                        });
+                    });
+                },
+            );
+
+            if let Some(p) = preset_to_apply {
+                self.record_undo_state();
+                self.apply_preset(&p);
+                self.status_text = format!("Applied studio preset: {}", p.name);
+                self.trigger_render();
+                is_open = false;
+            }
+
+            self.show_preset_browser_modal = is_open;
         }
 
         // Canvas Geometry Crop Workshop Modal Dialog
@@ -6202,8 +6568,163 @@ impl eframe::App for DitherCraftApp {
                     );
                 }
 
+                // Alignment Guide Lines Overlay
+                if self.show_guides {
+                    let guide_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(0, 220, 255));
+                    let guide_font = egui::FontId::monospace(9.0);
+                    for &gy in &self.h_guides {
+                        let sy = img_rect.min.y + gy * self.canvas_zoom;
+                        if sy >= available_rect.min.y && sy <= available_rect.max.y {
+                            clipped_painter.line_segment([egui::pos2(available_rect.min.x, sy), egui::pos2(available_rect.max.x, sy)], guide_stroke);
+                            clipped_painter.text(
+                                egui::pos2(available_rect.min.x + 24.0, sy - 2.0),
+                                egui::Align2::LEFT_BOTTOM,
+                                format!("Y: {:.0}px", gy),
+                                guide_font.clone(),
+                                Color32::from_rgb(0, 220, 255),
+                            );
+                        }
+                    }
+                    for &gx in &self.v_guides {
+                        let sx = img_rect.min.x + gx * self.canvas_zoom;
+                        if sx >= available_rect.min.x && sx <= available_rect.max.x {
+                            clipped_painter.line_segment([egui::pos2(sx, available_rect.min.y), egui::pos2(sx, available_rect.max.y)], guide_stroke);
+                            clipped_painter.text(
+                                egui::pos2(sx + 2.0, available_rect.min.y + 24.0),
+                                egui::Align2::LEFT_TOP,
+                                format!("X: {:.0}px", gx),
+                                guide_font.clone(),
+                                Color32::from_rgb(0, 220, 255),
+                            );
+                        }
+                    }
+                }
+
+                // Viewport Pixel Rulers
+                if self.show_rulers {
+                    let ruler_bg = Color32::from_rgba_unmultiplied(20, 22, 28, 230);
+                    let ruler_border = egui::Stroke::new(1.0_f32, Color32::from_rgb(45, 48, 58));
+                    let tick_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(140, 145, 160));
+                    let major_tick_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(200, 205, 220));
+                    let cursor_stroke = egui::Stroke::new(1.2_f32, Color32::from_rgb(255, 200, 0));
+                    let tick_font = egui::FontId::monospace(8.5);
+
+                    let ruler_thick = 18.0_f32;
+                    let top_ruler_rect = egui::Rect::from_min_max(
+                        egui::pos2(available_rect.min.x + ruler_thick, available_rect.min.y),
+                        egui::pos2(available_rect.max.x, available_rect.min.y + ruler_thick),
+                    );
+                    let left_ruler_rect = egui::Rect::from_min_max(
+                        egui::pos2(available_rect.min.x, available_rect.min.y + ruler_thick),
+                        egui::pos2(available_rect.min.x + ruler_thick, available_rect.max.y),
+                    );
+                    let corner_rect = egui::Rect::from_min_size(available_rect.min, egui::vec2(ruler_thick, ruler_thick));
+
+                    // Corner box
+                    ui.painter().rect_filled(corner_rect, 0.0, ruler_bg);
+                    ui.painter().rect_stroke(corner_rect, 0.0, ruler_border);
+                    ui.painter().text(
+                        corner_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "px",
+                        egui::FontId::monospace(8.0),
+                        Color32::from_rgb(120, 130, 140),
+                    );
+
+                    // Top Ruler
+                    ui.painter().rect_filled(top_ruler_rect, 0.0, ruler_bg);
+                    ui.painter().line_segment([top_ruler_rect.left_bottom(), top_ruler_rect.right_bottom()], ruler_border);
+
+                    // Left Ruler
+                    ui.painter().rect_filled(left_ruler_rect, 0.0, ruler_bg);
+                    ui.painter().line_segment([left_ruler_rect.right_top(), left_ruler_rect.right_bottom()], ruler_border);
+
+                    // Determine tick intervals
+                    let (major_step, minor_step) = if self.canvas_zoom >= 8.0 {
+                        (10.0_f32, 2.0_f32)
+                    } else if self.canvas_zoom >= 3.0 {
+                        (25.0_f32, 5.0_f32)
+                    } else if self.canvas_zoom >= 1.0 {
+                        (50.0_f32, 10.0_f32)
+                    } else if self.canvas_zoom >= 0.4 {
+                        (100.0_f32, 20.0_f32)
+                    } else {
+                        (250.0_f32, 50.0_f32)
+                    };
+
+                    // Draw Top Ruler Ticks
+                    let min_img_x = ((top_ruler_rect.min.x - img_rect.min.x) / self.canvas_zoom).floor() as i32;
+                    let max_img_x = ((top_ruler_rect.max.x - img_rect.min.x) / self.canvas_zoom).ceil() as i32;
+                    let start_tick_x = (min_img_x as f32 / minor_step).floor() as i32;
+                    let end_tick_x = (max_img_x as f32 / minor_step).ceil() as i32;
+
+                    for t in start_tick_x..=end_tick_x {
+                        let px = t as f32 * minor_step;
+                        let sx = img_rect.min.x + px * self.canvas_zoom;
+                        if sx >= top_ruler_rect.min.x && sx <= top_ruler_rect.max.x {
+                            let is_major = (px % major_step).abs() < 0.001 || ((px / major_step).round() * major_step - px).abs() < 0.001;
+                            let tick_h = if is_major { 8.0 } else { 4.0 };
+                            ui.painter().line_segment(
+                                [egui::pos2(sx, top_ruler_rect.max.y - tick_h), egui::pos2(sx, top_ruler_rect.max.y)],
+                                if is_major { major_tick_stroke } else { tick_stroke },
+                            );
+                            if is_major {
+                                ui.painter().text(
+                                    egui::pos2(sx + 2.0, top_ruler_rect.min.y + 2.0),
+                                    egui::Align2::LEFT_TOP,
+                                    format!("{:.0}", px),
+                                    tick_font.clone(),
+                                    Color32::from_rgb(180, 185, 195),
+                                );
+                            }
+                        }
+                    }
+
+                    // Draw Left Ruler Ticks
+                    let min_img_y = ((left_ruler_rect.min.y - img_rect.min.y) / self.canvas_zoom).floor() as i32;
+                    let max_img_y = ((left_ruler_rect.max.y - img_rect.min.y) / self.canvas_zoom).ceil() as i32;
+                    let start_tick_y = (min_img_y as f32 / minor_step).floor() as i32;
+                    let end_tick_y = (max_img_y as f32 / minor_step).ceil() as i32;
+
+                    for t in start_tick_y..=end_tick_y {
+                        let py = t as f32 * minor_step;
+                        let sy = img_rect.min.y + py * self.canvas_zoom;
+                        if sy >= left_ruler_rect.min.y && sy <= left_ruler_rect.max.y {
+                            let is_major = (py % major_step).abs() < 0.001 || ((py / major_step).round() * major_step - py).abs() < 0.001;
+                            let tick_w = if is_major { 8.0 } else { 4.0 };
+                            ui.painter().line_segment(
+                                [egui::pos2(left_ruler_rect.max.x - tick_w, sy), egui::pos2(left_ruler_rect.max.x, sy)],
+                                if is_major { major_tick_stroke } else { tick_stroke },
+                            );
+                            if is_major {
+                                ui.painter().text(
+                                    egui::pos2(left_ruler_rect.min.x + 2.0, sy + 2.0),
+                                    egui::Align2::LEFT_TOP,
+                                    format!("{:.0}", py),
+                                    tick_font.clone(),
+                                    Color32::from_rgb(180, 185, 195),
+                                );
+                            }
+                        }
+                    }
+
+                    // Cursor indicator reticle on rulers
+                    if let Some(hover) = response.hover_pos() {
+                        if hover.x >= top_ruler_rect.min.x && hover.x <= top_ruler_rect.max.x {
+                            ui.painter()
+                                .line_segment([egui::pos2(hover.x, top_ruler_rect.min.y), egui::pos2(hover.x, top_ruler_rect.max.y)], cursor_stroke);
+                        }
+                        if hover.y >= left_ruler_rect.min.y && hover.y <= left_ruler_rect.max.y {
+                            ui.painter().line_segment(
+                                [egui::pos2(left_ruler_rect.min.x, hover.y), egui::pos2(left_ruler_rect.max.x, hover.y)],
+                                cursor_stroke,
+                            );
+                        }
+                    }
+                }
+
                 // Floating Viewport HUD
-                let hud_size = egui::vec2(580.0, 34.0);
+                let hud_size = egui::vec2(660.0, 34.0);
                 let hud_rect = egui::Rect::from_min_size(egui::pos2(available_rect.max.x - hud_size.x - 16.0, available_rect.min.y + 16.0), hud_size);
 
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(hud_rect), |ui| {
@@ -6230,6 +6751,8 @@ impl eframe::App for DitherCraftApp {
                             ui.separator();
                             ui.checkbox(&mut self.show_pixel_grid, "Grid");
                             ui.checkbox(&mut self.show_loupe, "Loupe");
+                            ui.checkbox(&mut self.show_rulers, "Rulers");
+                            ui.checkbox(&mut self.show_guides, "Guides");
                             if self.aspect_guide != RetroAspectGuide::None
                                 && ui.small_button("Clear Frame").on_hover_text("Clear aspect ratio guide").clicked()
                             {
@@ -6570,6 +7093,11 @@ impl eframe::App for DitherCraftApp {
                     "Pipeline Telemetry:\n• Dither: {:.2} ms\n• Effects: {:.2} ms\n• Histogram: {:.2} ms\n• Total: {:.2} ms",
                     self.telemetry_dither_ms, self.telemetry_effects_ms, self.telemetry_histogram_ms, self.render_latency_ms
                 ));
+                if self.is_loading_media {
+                    ui.spinner();
+                    ui.colored_label(Color32::from_rgb(255, 200, 50), format!("Loading {}...", self.loading_media_filename));
+                    ui.separator();
+                }
                 if self.is_rendering {
                     ui.spinner();
                     ui.label("Rendering on Rayon worker thread...");
@@ -6827,6 +7355,17 @@ mod tests {
             mask_sample_color: [255, 255, 255],
             selection_modify_radius: 4,
             ui_scale: 1.0,
+            pending_media_load: None,
+            is_loading_media: false,
+            loading_media_filename: String::new(),
+            show_rulers: true,
+            show_guides: true,
+            h_guides: Vec::new(),
+            v_guides: Vec::new(),
+            show_preset_browser_modal: false,
+            preset_browser_search: String::new(),
+            preset_browser_category: "All".into(),
+            keymap_profile: "DitherCraft Native".into(),
         };
 
         let catalog = app.build_command_catalog();
@@ -7048,6 +7587,17 @@ mod tests {
             mask_sample_color: [255, 255, 255],
             selection_modify_radius: 4,
             ui_scale: 1.0,
+            pending_media_load: None,
+            is_loading_media: false,
+            loading_media_filename: String::new(),
+            show_rulers: true,
+            show_guides: true,
+            h_guides: Vec::new(),
+            v_guides: Vec::new(),
+            show_preset_browser_modal: false,
+            preset_browser_search: String::new(),
+            preset_browser_category: "All".into(),
+            keymap_profile: "DitherCraft Native".into(),
         };
 
         // Create 16x16 test image buffer
@@ -7224,6 +7774,17 @@ mod tests {
             mask_sample_color: [255, 255, 255],
             selection_modify_radius: 4,
             ui_scale: 1.0,
+            pending_media_load: None,
+            is_loading_media: false,
+            loading_media_filename: String::new(),
+            show_rulers: true,
+            show_guides: true,
+            h_guides: Vec::new(),
+            v_guides: Vec::new(),
+            show_preset_browser_modal: false,
+            preset_browser_search: String::new(),
+            preset_browser_category: "All".into(),
+            keymap_profile: "DitherCraft Native".into(),
         };
 
         let load_res = app2.load_project_bundle(&temp_path);
@@ -7355,5 +7916,87 @@ mod tests {
         let now = SystemTime::now();
         let future = now + std::time::Duration::from_secs(1);
         assert!(future > now);
+    }
+
+    #[test]
+    fn test_svg_rasterizer_in_media_worker() {
+        let temp_svg_path = std::env::temp_dir().join(format!("test_media_worker_{}.svg", std::process::id()));
+        let svg_data = r##"<svg width="64" height="64" viewBox="0 0 64 64"><rect x="0" y="0" width="64" height="64" fill="#000000"/><circle cx="32" cy="32" r="16" fill="#FFFFFF"/></svg>"##;
+        std::fs::write(&temp_svg_path, svg_data).expect("write temp svg");
+
+        let loaded = DitherCraftApp::decode_media_worker(&temp_svg_path).expect("decode svg via media worker");
+        assert_eq!(loaded.frames.len(), 1);
+        assert_eq!(loaded.frames[0].width, 64);
+        assert_eq!(loaded.frames[0].height, 64);
+        assert!(loaded.desc.contains("SVG Vector (64x64)"));
+        let _ = std::fs::remove_file(&temp_svg_path);
+    }
+
+    #[test]
+    fn test_viewport_rulers_and_guides_state() {
+        let mut show_rulers = false;
+        let mut show_guides = false;
+        let mut h_guides: Vec<f32> = Vec::new();
+        let mut v_guides: Vec<f32> = Vec::new();
+
+        show_rulers = !show_rulers;
+        assert!(show_rulers);
+        show_guides = !show_guides;
+        assert!(show_guides);
+
+        h_guides.push(128.0);
+        v_guides.push(256.0);
+        assert_eq!(h_guides, vec![128.0]);
+        assert_eq!(v_guides, vec![256.0]);
+
+        h_guides.clear();
+        v_guides.clear();
+        assert!(h_guides.is_empty() && v_guides.is_empty());
+    }
+
+    #[test]
+    fn test_visual_preset_browser_categories_and_search() {
+        let presets = StudioPreset::bundled_presets();
+        assert!(!presets.is_empty());
+
+        // Category filtering: Vintage Hardware
+        let vintage: Vec<_> = presets
+            .iter()
+            .filter(|p| {
+                p.name.contains("Game Boy")
+                    || p.name.contains("CGA")
+                    || p.name.contains("Macintosh")
+                    || p.name.contains("NES")
+                    || p.name.contains("C64")
+            })
+            .collect();
+        assert!(!vintage.is_empty(), "Vintage Hardware presets must not be empty");
+
+        // Category filtering: Monochrome & Print
+        let mono_print: Vec<_> = presets
+            .iter()
+            .filter(|p| {
+                p.name.contains("Newspaper")
+                    || p.name.contains("Thermal")
+                    || p.name.contains("1-Bit")
+                    || p.name.contains("Print")
+                    || p.palette_name.contains("1-bit")
+                    || p.palette_name.contains("Monochrome")
+            })
+            .collect();
+        assert!(!mono_print.is_empty(), "Monochrome & Print presets must not be empty");
+
+        // Search filtering
+        let search_query = "game boy";
+        let filtered: Vec<_> =
+            presets.iter().filter(|p| p.name.to_lowercase().contains(search_query) || p.palette_name.to_lowercase().contains(search_query)).collect();
+        assert!(!filtered.is_empty());
+        assert!(filtered.iter().all(|p| p.name.to_lowercase().contains("game boy") || p.palette_name.to_lowercase().contains("game boy")));
+
+        // Palette resolution
+        for p in &presets {
+            let pal = Palette::from_name(&p.palette_name);
+            assert!(!pal.is_empty(), "Palette for preset {} should not be empty", p.name);
+        }
     }
 }

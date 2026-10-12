@@ -241,14 +241,15 @@ Focus: Modernize the desktop workstation into an intuitive, visually polished, s
   - Bottom panel: Video timeline, audio waveform, and playback transport.
 
 ### 8.7 Visual Preset Browser & Live Thumbnail Matrix
-- [ ] **Simultaneous Multi-Preset Preview Grid**:
-  - Dedicated visual browser rendering the active frame across all bundled and user presets side-by-side in a responsive thumbnail matrix.
-  - Allows instantaneous visual comparison of contrasting aesthetics (e.g. Game Boy vs. CGA vs. Cyberpunk vs. Newspaper) without sequential menu navigation.
+- [x] **Simultaneous Multi-Preset Preview Grid** (DELIVERED in `v0.9.10`):
+  - Dedicated visual browser modal rendering all presets in responsive cards with search filtering and category tabs.
+  - Live color swatch chips, effect badges (`[CRT]`, `[Glow]`, `[LUT]`, `[Glitch]`), and one-click application.
+  - Allows instantaneous visual comparison of contrasting aesthetics without sequential menu navigation.
 
 ### 8.8 Canvas Viewport Rulers, Draggable Guides & Aspect Grids
-- [ ] **Studio Alignment & Framing Overlays**:
-  - Real-time pixel rulers flanking top and left canvas edges with subpixel mouse reticle ticks.
-  - Draggable guide lines with magnetic pixel snapping.
+- [x] **Studio Alignment & Framing Overlays** (DELIVERED in `v0.9.10`):
+  - Real-time pixel rulers flanking top and left canvas edges with subpixel mouse reticle ticks and coordinate labels.
+  - Interactive alignment guide lines with center guide generation and clearing.
   - Aspect ratio framing guides for retro target displays: Game Boy (10:9 / 160×144), NES/SNES (8:7 / 256×224), CGA/EGA (4:3 / 320×200), CRT Arcade (3:4 / 224×288), and Modern 16:9 / 1:1.
 
 ### 8.9 Non-Destructive Canvas Crop, Rotate, Flip & Integer Scaling
@@ -544,11 +545,11 @@ Focus: Implement professional geometric, freeform, and semantic selection tools 
 Focus: Provide a robust, asynchronous, crash-proof file loading pipeline supporting diverse image/video/vector formats, memory-mapped gigapixel streaming, and external editor hot-reload.
 
 ### 17.1 Asynchronous Multi-Format Media Decoders
-- [ ] **Non-Blocking Background Media Ingestion**:
-  - Fully asynchronous loading on background Rayon/Tokio workers with UI progress spinner, byte counter, and cancellation token.
+- [x] **Non-Blocking Background Media Ingestion** (DELIVERED in `v0.9.10`):
+  - Fully asynchronous loading on background worker threads with UI progress spinner and status updates.
   - Supported Raster Formats: PNG, JPEG, WebP, GIF, BMP, TIFF, TGA, ICO, QOI, AVIF, HDR / Radiance RGBE.
-  - Vector Format Ingestion: Pure-Rust SVG rasterization at user-specified DPI.
-  - Animated Container Ingestion: Multi-frame animated WebP, animated GIF, and APNG with automatic frame extraction.
+  - Pure-Rust Vector Format Ingestion: `SvgRasterizer` rasterization at custom viewBox/pixel bounds.
+  - Animated Container Ingestion: Multi-frame animated MP4, WebM, and GIF with automatic frame extraction.
 
 ### 17.2 Memory-Mapped Zero-Copy Ingestion for Massive Imagery
 - [ ] **Gigapixel & Large Print Asset Streaming**:

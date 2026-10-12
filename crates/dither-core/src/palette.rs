@@ -801,6 +801,22 @@ impl Palette {
             metric: ColorMetric::default(),
         }
     }
+
+    /// Retrieve a bundled palette preset by name, defaulting to Game Boy if unknown.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "Monochrome" | "Monochrome 1-bit" => Self::monochrome(),
+            "Macintosh 1-bit" => Self::mac_1bit(),
+            "CGA Mode 1" => Self::cga_mode_1(),
+            "Cyberpunk" => Self::cyberpunk(),
+            "Apple II" => Self::apple_ii(),
+            "Commodore 64" => Self::commodore_64(),
+            "NES" => Self::nes(),
+            "PICO-8" => Self::pico_8(),
+            "CMYK Process" => Self::cmyk_process(),
+            _ => Self::game_boy(),
+        }
+    }
 }
 
 /// 3D KD-Tree for O(log K) accelerated nearest neighbor search in RGB color space.
