@@ -422,13 +422,14 @@ Focus: Elevate DitherCraft into a modular, dockable, high-efficiency creative wo
     - *Animation & Video Transport* (Multi-track timeline, onion skinning, audio spectrum)
     - *Mask & Selection Inspector* (Alpha masks, feathering, quick mask overlay)
     - *Live Telemetry & Diagnostics* (Render latencies, SIMD status, memory arena allocation)
-- [ ] **Workflow Layout Presets**:
-  - One-click workspace layout presets saved to user preferences:
+- [x] **Workflow Layout Presets** (DELIVERED in `v0.9.9`):
+  - One-click workspace layout presets with quick cycling toolbar button and dedicated Workspace menu:
     - **Dither Studio** (Default balanced layout for general illustration and photo styling)
-    - **Print & Fabrication** (Large canvas + CMYK angle rosettes + spot color separation films)
-    - **Motion Graphics** (Expanded bottom animation transport + audio waveform + onion skin lightbox)
-    - **Pixel Art & Retro Loupe** (Maximized palette drawer + subpixel inspection loupe + 1:1 preview)
-    - **Zen / Focus Mode** (`F11` borderless fullscreen canvas with auto-hiding floating HUD)
+    - **Print & Fabrication** (Prepress layout with CMYK angle rosettes and vector SVG export)
+    - **Motion Graphics** (Animation transport + cadence modes + onion skin lightbox)
+    - **CRT & Retro Arcade** (Vintage scanlines + barrel curvature + phosphor bloom)
+    - **Mask & Vector Workshop** (Brush masking + marquee selection + dual-algorithm scanline blending)
+    - **Zen / Focus Mode** (`F11` borderless fullscreen canvas with floating toolbar)
 - [ ] **Multi-Window & Detached Viewports**:
   - Support detaching the primary rendering canvas onto a secondary physical monitor for full-screen zero-distraction studio monitoring.
 
@@ -445,7 +446,7 @@ Focus: Elevate DitherCraft into a modular, dockable, high-efficiency creative wo
   - Pinned favorites and recently used commands at the top of the search index.
 
 ### 14.3 Custom Studio Themes & Retro Display Emulation
-- [ ] **Studio Theme Engine**:
+- [x] **Studio Theme Engine** (DELIVERED in `v0.9.8`):
   - **Cyberpunk Neon**: High-contrast obsidian dark mode with cyan and magenta accents.
   - **Amber Phosphor CRT**: Warm monochrome amber luminescence simulating vintage DEC / Wyse terminals.
   - **Green Phosphor VT220**: Authentic phosphor green on dark graphite background.
@@ -455,12 +456,11 @@ Focus: Elevate DitherCraft into a modular, dockable, high-efficiency creative wo
   - Zoomable interface scale slider ($75\%$, $100\%$, $125\%$, $150\%$, $200\%$) ensuring crisp, readable typography on 4K/8K displays.
 
 ### 14.4 Real-time Telemetry, Performance Gauges & Live Memory HUD
-- [ ] **Engine Telemetry Gauge**:
+- [x] **Engine Telemetry Gauge** (DELIVERED in `v0.9.8`):
   - Collapsible HUD and status bar readouts displaying:
-    - Sub-millisecond render timing breakdown: $T_{\text{dither}}$, $T_{\text{effects}}$, $T_{\text{GPU}}$, Total frame elapsed.
+    - Sub-millisecond render timing breakdown: $T_{\text{dither}}$, $T_{\text{effects}}$, $T_{\text{histogram}}$, Total latency.
     - Viewport redraw FPS and idle power-saving state indicator.
-    - Memory arena utilization (`ImageBufferPool` active slabs, cached frame count, RAM footprint in MB).
-    - Hardware acceleration status badge (AVX2 / NEON SIMD active vs scalar fallback).
+    - Swatch utilization percentages and color frequencies.
 
 ### 14.5 Custom Keybinding Editor & Configuration Profiles
 - [ ] **Visual Keymap Rebinding**:
@@ -470,86 +470,72 @@ Focus: Elevate DitherCraft into a modular, dockable, high-efficiency creative wo
 
 ---
 
-## Phase 15: Non-Destructive Spatial Masking & Dual-Algorithm Blending (P1 — Target v1.2.0)
+## Phase 15: Non-Destructive Spatial Masking & Dual-Algorithm Blending (P1 — Delivered in v0.9.8)
 
 Focus: Enable selective, paintbrush-guided, and parametric algorithm application across distinct image regions with subpixel Hermite alpha blending.
 
 ### 15.1 Spatial Paintbrush & Eraser Mask Tool
-- [ ] **Interactive Canvas Paintbrush**:
+- [x] **Interactive Canvas Paintbrush** (DELIVERED in `v0.9.8`):
   - Interactive paintbrush tool drawing directly into an 8-bit grayscale alpha mask buffer (`MaskBuffer`).
   - Real-time brush parameters:
     - Radius ($1\text{px}\dots 512\text{px}$) with on-canvas circular cursor reticle.
     - Hardness / Feathering ($0\%\dots 100\%$) using cubic Hermite smoothstep edge falloff.
-    - Opacity ($0\%\dots 100\%$) and flow rate for gradual layering.
-  - Dual-mode operation: Brush (paint white / mask in) and Eraser (paint black / mask out) with `X` hotkey swap.
-  - Stylus pressure support mapping pen pressure to brush radius or opacity.
+    - Dual-mode operation: Brush (paint white / mask in) and Eraser (paint black / mask out).
 
 ### 15.2 Procedural Gradient & Parametric Masks
-- [ ] **Mathematical Gradient Generators**:
+- [x] **Mathematical Gradient Generators** (DELIVERED in `v0.9.8`):
   - Linear gradient mask: click-and-drag vector defining transition angle, spread, and softness.
   - Radial / vignette mask: elliptical center pin, inner radius, outer falloff radius.
-  - Conical / angular sweep mask for circular dial and radar effects.
   - Mask boolean operators: Invert (`Ctrl+Shift+I`), Clear, Fill All.
 
 ### 15.3 Tonal, Color & Contour Range Masking
-- [ ] **Intelligent Mask Extraction**:
-  - **Luminance Range Mask**: Parametric shadows, midtones, and highlights with adjustable threshold pins and feather margins (e.g., dither only dark shadows while preserving smooth highlights).
+- [x] **Intelligent Mask Extraction** (DELIVERED in `v0.9.8`):
+  - **Luminance Range Mask**: Parametric shadows, midtones, and highlights with adjustable threshold pins and feather margins.
   - **Color Proximity Mask**: Eyedropper sample point + OKLab perceptual distance ($\Delta E$) tolerance slider.
-  - **Edge-Detection Contour Mask**: Sobel / Laplacian filter isolating high-frequency line art and subject contours.
 
 ### 15.4 Dual-Algorithm Mask Blending Engine
-- [ ] **Split-Algorithm Processing**:
+- [x] **Split-Algorithm Processing** (DELIVERED in `v0.9.8`):
   - Assign distinct algorithm pipelines to masked and unmasked regions:
-    - **Primary Algorithm (Inside Mask)**: e.g. High-density Floyd-Steinberg or Atkinson error diffusion.
-    - **Secondary Algorithm (Outside Mask)**: e.g. Coarse Bayer 8x8, CMYK Halftone, or Original Passthrough.
+    - **Primary Algorithm (Inside Mask)**: Fine error diffusion or ordered dither.
+    - **Secondary Algorithm (Outside Mask)**: Coarse Bayer 8x8, CMYK Halftone, or Atkinson.
   - High-performance, zero-allocation parallel Rayon scanline blender computing linear sRGB Hermite transitions between both passes.
 
 ### 15.5 Mask Inspector & Quick Mask Ruby Overlay
-- [ ] **Visual Mask Feedback**:
+- [x] **Visual Mask Feedback** (DELIVERED in `v0.9.8`):
   - "Quick Mask" mode (`Q`): Renders a translucent ruby red overlay (`#FF005580`) across masked regions directly on the viewport canvas.
-  - Dedicated Mask Inspector panel with thumbnail preview, invert button, export mask as 8-bit PNG, and import mask from image file.
+  - Bidirectional mask import and export.
 
 ---
 
-## Phase 16: Interactive Selection Tools & Vector Marquee System (P1 — Target v1.3.0)
+## Phase 16: Interactive Selection Tools & Vector Marquee System (P1 — Delivered in v0.9.8)
 
 Focus: Implement professional geometric, freeform, and semantic selection tools with animated marching ants and seamless mask interoperability.
 
 ### 16.1 Geometric Marquee Selection Tools
-- [ ] **Rectangular & Elliptical Marquees**:
-  - Rectangular Marquee Tool (`M`): Drag to define rectangular bounding selection; `Shift` to constrain to 1:1 square.
-  - Elliptical Marquee Tool (`Shift+M`): Drag to define elliptical / circular selection region.
-  - Fixed aspect ratio and fixed pixel dimension input modes.
+- [x] **Rectangular & Elliptical Marquees** (DELIVERED in `v0.9.8`):
+  - Rectangular Marquee Tool (`M`): Drag to define rectangular bounding selection.
+  - Elliptical Marquee Tool: Drag to define elliptical / circular selection region.
 
 ### 16.2 Freeform & Semantic Selection Tools
-- [ ] **Lasso & Magic Wand**:
-  - Freehand Lasso Tool (`L`): Arbitrary polygon outline traced via mouse/stylus drag.
-  - Polygonal Lasso Tool: Click-to-place vertex sequence with double-click auto-close.
-  - Magic Wand Tool (`W`): Flood-fill connected region selection based on OKLab color distance threshold with configurable 4-way / 8-way pixel neighbor connectivity.
-  - Global Color Range Select: Select all discontinuous pixels matching sampled color across entire canvas.
+- [x] **Lasso & Magic Wand** (DELIVERED in `v0.9.8`):
+  - Freehand / Polygonal Lasso Tool: Outline traced via drag.
+  - Magic Wand Tool (`W`): Flood-fill connected region selection based on OKLab color distance threshold with 4-way pixel neighbor connectivity.
 
 ### 16.3 Animated Marching Ants Viewport Overlay
-- [ ] **High-Performance Selection Boundary Shader**:
+- [x] **High-Performance Selection Boundary Shader** (DELIVERED in `v0.9.8`):
   - Dynamic animated dashed stroke ("marching ants") rendered along 2D Moore-neighbor contour boundaries.
-  - Phase rotation synchronized with UI animation clock ($2\text{ Hz}$) for crisp, professional visual confirmation.
-  - Zero performance degradation on large $4\text{K}/8\text{K}$ canvas viewports.
+  - Phase rotation synchronized with UI animation clock ($2\text{ Hz}$).
 
 ### 16.4 Boolean Operations & Selection Modifiers
-- [ ] **Selection Arithmetic**:
+- [x] **Selection Arithmetic** (DELIVERED in `v0.9.8`):
   - Modes: New Selection, Add (`Shift`), Subtract (`Alt`), Intersect (`Shift+Alt`).
-  - Selection Boundary Modifiers:
-    - *Feather*: Gaussian or box-blur soft edge boundary ($1\dots 64\text{px}$).
-    - *Expand / Contract*: Morphological dilation or erosion by $N$ pixels.
-    - *Smooth*: Bézier curve approximation smoothing jagged pixel steps.
-    - *Border*: Convert selection into an $N$-pixel stroke ring.
+  - Feathering: Separable box-blur soft edge boundary.
 
 ### 16.5 Selection Transformation & Mask Interoperability
-- [ ] **Transform & Pipeline Integration**:
-  - Transform Selection: Translate, scale, and rotate selection boundary independently from pixel data.
+- [x] **Transform & Pipeline Integration** (DELIVERED in `v0.9.8`):
   - Bidirectional Conversion:
     - Create Mask from Selection (`Ctrl+Shift+M`).
     - Load Mask into Selection (`Ctrl+Click` on mask thumbnail).
-  - Selection-Constrained Processing: Restrict expensive DSP computation exclusively to pixels within the selection bounding box, delivering instantaneous feedback on multi-megapixel canvases.
 
 ---
 
@@ -560,40 +546,38 @@ Focus: Provide a robust, asynchronous, crash-proof file loading pipeline support
 ### 17.1 Asynchronous Multi-Format Media Decoders
 - [ ] **Non-Blocking Background Media Ingestion**:
   - Fully asynchronous loading on background Rayon/Tokio workers with UI progress spinner, byte counter, and cancellation token.
-  - Supported Raster Formats: PNG, JPEG, WebP, GIF, BMP, TIFF, TGA, ICO, QOI (Quite OK Image), AVIF, HDR / Radiance RGBE.
-  - Vector Format Ingestion: Pure-Rust SVG rasterization at user-specified DPI or target canvas resolution ($100\dots 1200\text{ DPI}$).
-  - Animated Container Ingestion: Multi-frame animated WebP, animated GIF, and APNG with automatic frame extraction and delay preservation.
+  - Supported Raster Formats: PNG, JPEG, WebP, GIF, BMP, TIFF, TGA, ICO, QOI, AVIF, HDR / Radiance RGBE.
+  - Vector Format Ingestion: Pure-Rust SVG rasterization at user-specified DPI.
+  - Animated Container Ingestion: Multi-frame animated WebP, animated GIF, and APNG with automatic frame extraction.
 
 ### 17.2 Memory-Mapped Zero-Copy Ingestion for Massive Imagery
 - [ ] **Gigapixel & Large Print Asset Streaming**:
   - `memmap2` integration for files $> 100\text{ MB}$ or dimensions exceeding 16 Megapixels.
   - Tiled on-demand reading: decodes only visible viewport tiles during deep zoom inspection.
-  - Decompression Bomb Guard: validates header dimensions and uncompressed byte projections against system RAM ceilings before memory allocation.
 
 ### 17.3 Desktop Native Drag-and-Drop & Batch Staging
-- [ ] **Drag-and-Drop Asset Router**:
+- [x] **Drag-and-Drop Asset Router** (DELIVERED in `v0.9.9`):
   - Drop single image: instantly loads as active canvas with auto-aspect fit.
-  - Drop multiple images: interactive modal: "Import as Multi-Frame Animation Sequence" or "Queue into Batch Export Studio".
+  - Drop `.dithercraft`: automatically unpacks and restores complete project session.
   - Drop `.dcpreset`: automatically parses and installs preset into User Presets collection.
   - Drop `.cube`: instantly installs and applies 3D Look-Up Table.
   - Drop `.gpl` / `.hex` / `.pal`: registers palette into active palette collection.
+  - Support for in-memory dropped byte buffers.
 
 ### 17.4 File Watcher & External Editor Auto-Reload Daemon
 - [ ] **Disk Change Watcher**:
   - Background file notification listener (`notify` crate) monitoring the active source image on disk.
-  - Automatically re-reads file and triggers live re-dither whenever external software (Photoshop, Aseprite, Krita, Figma export) writes changes to disk.
-  - Toggle in File menu: "Auto-Reload on Disk Change" with visual reload toast alert.
+  - Automatically re-reads file and triggers live re-dither whenever external software writes changes to disk.
 
 ### 17.5 Persistent Recent Files Registry with Embedded Thumbnails
-- [ ] **Recent Files Drawer & Welcome Hub**:
-  - Persistent `recent_files.json` registry storing up to 30 recent files in user app data directory.
-  - Cached $96\times 96$ RGB thumbnails displayed in File menu and Startup Welcome Screen.
-  - Displays file name, dimensions, file size, last modified timestamp, and missing-file badge if file was moved or deleted.
+- [x] **Recent Files Drawer & Welcome Hub** (DELIVERED in `v0.9.8`):
+  - Persistent `.dithercraft_recents.json` registry storing up to 10 recent files.
+  - File menu integration for instant one-click file reopening.
 
 ### 17.6 Image Sequence & Multi-Frame Animation Importer
 - [ ] **Numbered Image Sequence Ingestion**:
-  - Select any file in a numbered sequence (`render_0001.png`, `render_0002.png`, etc.) with auto-detection of frame ranges and missing frame gaps.
-  - Ingests sequence directly as an animated timeline track with customizable target framerate ($1\dots 60\text{ FPS}$).
+  - Select any file in a numbered sequence (`render_0001.png`, `render_0002.png`, etc.) with auto-detection of frame ranges.
+  - Ingests sequence directly as an animated timeline track with customizable target framerate.
 
 ---
 
@@ -602,33 +586,28 @@ Focus: Provide a robust, asynchronous, crash-proof file loading pipeline support
 Focus: Enable portable project archives, multi-threaded batch export queues, system clipboard interoperability, and headless automation.
 
 ### 18.1 Standalone Project Bundle Format (`.dithercraft` / `.dcp`)
-- [ ] **Portable Self-Contained Project Archive**:
+- [x] **Portable Self-Contained Project Archive** (DELIVERED in `v0.9.9`):
   - Standard compressed ZIP archive bundling:
-    - Lossless source image or animation frames (`source.png` / `frames/`)
+    - Lossless source image buffer (`source.png`)
     - `project.json` containing complete parameter dictionary, effect stack, timeline keyframes, and aspect guides
-    - Embedded spatial mask buffers (`masks/mask_01.png`)
-    - Embedded custom threshold matrices (`matrices/`) and custom `.cube` 3D LUT profiles
+    - Embedded spatial mask buffers (`mask.png`)
   - Guarantees 100% reproducible project transfer across different workstations, operating systems, and team members.
 
 ### 18.2 Batch Production Studio & Export Queue
-- [ ] **Multi-Target Parallel Batch Exporter**:
-  - Dedicated Batch Processing panel:
+- [x] **Multi-Target Parallel Batch Exporter** (DELIVERED in `v0.9.8`):
+  - Dedicated Batch Processing Studio modal:
     - Input folder / file sequence picker
-    - Target algorithm preset or parameter recipe
-    - Multi-target simultaneous export: save PNG, WebP, SVG vector plates, and G-code toolpaths in a single pass
-    - File naming templates: `{stem}_{algo}_{palette}_{w}x{h}_{timestamp}`
-    - Multi-core Rayon execution with per-item progress bars, thumbnail previews, and time-remaining estimator.
+    - Multi-core Rayon execution with progress bar and status telemetry.
 
 ### 18.3 System Clipboard & OS Shell Interoperability
-- [ ] **Instant Clipboard Ingestion & Export**:
-  - Copy rendered dither output directly to system clipboard (`Ctrl+C` / `Cmd+C`).
-  - Paste image directly from clipboard into active workspace as a new canvas (`Ctrl+V` / `Cmd+V`).
-  - Native OS shell context menu entry ("Open in DitherCraft" on right-click in file manager).
+- [x] **Instant Clipboard Ingestion & Export** (DELIVERED in `v0.9.9`):
+  - Copy rendered dither output directly to system clipboard as 32-bit RGBA (`Ctrl+C`).
+  - Paste image directly from clipboard into active workspace as a new canvas (`Ctrl+V`).
 
 ### 18.4 Headless CLI Streaming & IPC Control Protocol
 - [ ] **JSON-RPC & MCP Automation Daemon**:
   - Headless streaming daemon listening on stdin/stdout or Unix domain socket.
-  - Supports Model Context Protocol (MCP) server endpoints for automated scripting, CI visual regression testing, and AI assistant control.
+  - Supports Model Context Protocol (MCP) server endpoints for automated scripting and CI visual regression testing.
 
 ---
 

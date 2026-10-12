@@ -426,6 +426,64 @@ impl StudioPreset {
     }
 }
 
+/// Preset layout configuration for the workstation UI panels and canvas ergonomics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WorkflowLayoutMode {
+    #[default]
+    DitherStudio,
+    ZenFocus,
+    PrintPrepress,
+    CrtArcade,
+    MaskWorkshop,
+}
+
+impl WorkflowLayoutMode {
+    pub const ALL: [Self; 5] = [Self::DitherStudio, Self::ZenFocus, Self::PrintPrepress, Self::CrtArcade, Self::MaskWorkshop];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::DitherStudio => "🎨 Dither Studio",
+            Self::ZenFocus => "🧘 Zen Focus (F11)",
+            Self::PrintPrepress => "🖨 Print & Prepress",
+            Self::CrtArcade => "📺 CRT & Retro Arcade",
+            Self::MaskWorkshop => "🖌 Mask & Vector Workshop",
+        }
+    }
+}
+
+/// Project bundle manifest serialized inside `.dithercraft` ZIP archives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectManifest {
+    pub format_version: u32,
+    pub preset: StudioPreset,
+    #[serde(default)]
+    pub secondary_algo: String,
+    #[serde(default)]
+    pub mask_blend_enabled: bool,
+    #[serde(default)]
+    pub has_mask: bool,
+    #[serde(default)]
+    pub aspect_guide: RetroAspectGuide,
+    #[serde(default)]
+    pub cadence_mode: CadenceMode,
+    #[serde(default)]
+    pub cvd_mode: CvdMode,
+    #[serde(default)]
+    pub cmyk_dot_shape: HalftoneDotShape,
+    #[serde(default)]
+    pub cmyk_dot_gain: f32,
+    #[serde(default)]
+    pub rd_morphology: ReactionDiffusionMorphology,
+    #[serde(default)]
+    pub rd_steps: usize,
+    #[serde(default)]
+    pub flow_scale: f32,
+    #[serde(default)]
+    pub flow_swirl: f32,
+    #[serde(default)]
+    pub effect_stack: EffectStack,
+}
+
 /// Actions executable from the Universal Command Palette.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommandActionKind {
@@ -469,6 +527,11 @@ pub enum CommandActionKind {
     ResetPanZoom,
     Undo,
     Redo,
+    CopyRenderedImage,
+    PasteFromClipboard,
+    SaveProjectBundle,
+    OpenProjectBundle,
+    SetWorkflowMode(WorkflowLayoutMode),
 }
 
 /// Catalog entry in the Universal Command Palette.
@@ -688,6 +751,9 @@ pub struct DitherCraftApp {
     show_command_palette: bool,
     command_search_query: String,
     command_selected_index: usize,
+
+    // Phase 14.1: Workflow Layout Modes
+    pub workflow_mode: WorkflowLayoutMode,
 }
 
 impl DitherCraftApp {
@@ -890,6 +956,9 @@ impl DitherCraftApp {
             show_command_palette: false,
             command_search_query: String::new(),
             command_selected_index: 0,
+
+            // Phase 14.1: Workflow Layout Modes
+            workflow_mode: WorkflowLayoutMode::DitherStudio,
         }
     }
 
@@ -1256,7 +1325,43 @@ impl DitherCraftApp {
             kind: CommandActionKind::ExportGCode,
         });
 
-        // 10. History
+        // 10. Clipboard & Project Bundles
+        items.push(CommandItem {
+            title: "Clipboard: Copy Rendered Image (Ctrl+C)".into(),
+            category: "Clipboard",
+            shortcut: Some("Ctrl+C"),
+            kind: CommandActionKind::CopyRenderedImage,
+        });
+        items.push(CommandItem {
+            title: "Clipboard: Paste Image from Clipboard (Ctrl+V)".into(),
+            category: "Clipboard",
+            shortcut: Some("Ctrl+V"),
+            kind: CommandActionKind::PasteFromClipboard,
+        });
+        items.push(CommandItem {
+            title: "Project: Save Project Bundle (.dithercraft) (Ctrl+S)".into(),
+            category: "Project",
+            shortcut: Some("Ctrl+S"),
+            kind: CommandActionKind::SaveProjectBundle,
+        });
+        items.push(CommandItem {
+            title: "Project: Open Project Bundle (.dithercraft)...".into(),
+            category: "Project",
+            shortcut: Some("Ctrl+O"),
+            kind: CommandActionKind::OpenProjectBundle,
+        });
+
+        // 11. Workflow Modes
+        for mode in WorkflowLayoutMode::ALL {
+            items.push(CommandItem {
+                title: format!("Workflow: {}", mode.label()),
+                category: "Workflow",
+                shortcut: if mode == WorkflowLayoutMode::ZenFocus { Some("F11") } else { None },
+                kind: CommandActionKind::SetWorkflowMode(mode),
+            });
+        }
+
+        // 12. History
         items.push(CommandItem { title: "Undo".into(), category: "Edit", shortcut: Some("Ctrl+Z"), kind: CommandActionKind::Undo });
         items.push(CommandItem { title: "Redo".into(), category: "Edit", shortcut: Some("Ctrl+Shift+Z"), kind: CommandActionKind::Redo });
 
@@ -1470,6 +1575,21 @@ impl DitherCraftApp {
             }
             CommandActionKind::Redo => {
                 self.redo();
+            }
+            CommandActionKind::CopyRenderedImage => {
+                self.copy_rendered_image_to_clipboard();
+            }
+            CommandActionKind::PasteFromClipboard => {
+                self.paste_image_from_clipboard();
+            }
+            CommandActionKind::SaveProjectBundle => {
+                self.save_project_bundle_dialog();
+            }
+            CommandActionKind::OpenProjectBundle => {
+                self.open_project_bundle_dialog();
+            }
+            CommandActionKind::SetWorkflowMode(mode) => {
+                self.set_workflow_mode(mode);
             }
         }
         self.show_command_palette = false;
@@ -1737,6 +1857,422 @@ impl DitherCraftApp {
                 self.canvas_zoom = 1.0;
                 self.status_text = format!("Loaded static image ({w}x{h})");
                 self.ensure_buffers_dimension(w, h);
+                self.trigger_render();
+            }
+        }
+    }
+
+    /// Copy the rendered output buffer (converted to 32-bit RGBA) directly to the OS system clipboard.
+    pub fn copy_rendered_image_to_clipboard(&mut self) {
+        let Some(ref img) = self.rendered_image else {
+            self.status_text = "No rendered image available to copy".into();
+            return;
+        };
+
+        let mut rgba = Vec::with_capacity((img.width as usize) * (img.height as usize) * 4);
+        for chunk in img.data.chunks_exact(3) {
+            rgba.push(chunk[0]);
+            rgba.push(chunk[1]);
+            rgba.push(chunk[2]);
+            rgba.push(255);
+        }
+
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                let img_data =
+                    arboard::ImageData { width: img.width as usize, height: img.height as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
+                match clipboard.set_image(img_data) {
+                    Ok(_) => {
+                        self.status_text = format!("Copied rendered image to system clipboard ({}x{})", img.width, img.height);
+                    }
+                    Err(e) => {
+                        self.status_text = format!("Failed to copy image to clipboard: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                self.status_text = format!("Failed to access system clipboard: {e}");
+            }
+        }
+    }
+
+    /// Read an image from the OS system clipboard and load it as the active workspace source canvas.
+    pub fn paste_image_from_clipboard(&mut self) {
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.get_image() {
+                Ok(img_data) => {
+                    let w = img_data.width as u32;
+                    let h = img_data.height as u32;
+                    if w == 0 || h == 0 || (w as u64) * (h as u64) > 64 * 1024 * 1024 {
+                        self.status_text = "Clipboard image is empty or exceeds safety dimensions".into();
+                        return;
+                    }
+
+                    let mut rgb = Vec::with_capacity((w as usize) * (h as usize) * 3);
+                    for chunk in img_data.bytes.chunks_exact(4) {
+                        rgb.push(chunk[0]);
+                        rgb.push(chunk[1]);
+                        rgb.push(chunk[2]);
+                    }
+
+                    if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb) {
+                        let arc_buf = Arc::new(buf);
+                        self.record_undo_state();
+                        self.source_image = Some(arc_buf.clone());
+                        self.source_frames = vec![arc_buf];
+                        self.frame_delays = vec![100];
+                        self.timeline_max_frames = 60;
+                        self.timeline_frame = 0;
+                        self.source_path = None;
+                        self.canvas_pan = egui::Vec2::ZERO;
+                        self.canvas_zoom = 1.0_f32;
+                        self.ensure_buffers_dimension(w, h);
+                        self.status_text = format!("Pasted image from system clipboard ({w}x{h})");
+                        self.trigger_render();
+                    } else {
+                        self.status_text = "Failed to construct image buffer from clipboard bytes".into();
+                    }
+                }
+                Err(e) => {
+                    self.status_text = format!("No image found on system clipboard: {e}");
+                }
+            },
+            Err(e) => {
+                self.status_text = format!("Failed to access system clipboard: {e}");
+            }
+        }
+    }
+
+    /// Save the entire studio session (source image, spatial mask, tone curves, presets, effect stack) into a `.dithercraft` ZIP archive.
+    pub fn save_project_bundle(&mut self, path: &Path) -> Result<(), String> {
+        let Some(ref src) = self.source_image else {
+            return Err("Cannot save project: No source image loaded".into());
+        };
+
+        let file = std::fs::File::create(path).map_err(|e| format!("Failed to create project file: {e}"))?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        // 1. Write project.json
+        let manifest = ProjectManifest {
+            format_version: 1,
+            preset: self.capture_preset("Saved Project Session"),
+            secondary_algo: self.secondary_algo.clone(),
+            mask_blend_enabled: self.mask_blend_enabled,
+            has_mask: self.mask.as_ref().map(|m| !m.is_empty()).unwrap_or(false),
+            aspect_guide: self.aspect_guide,
+            cadence_mode: self.cadence_mode,
+            cvd_mode: self.cvd_mode,
+            cmyk_dot_shape: self.cmyk_dot_shape,
+            cmyk_dot_gain: self.cmyk_dot_gain,
+            rd_morphology: self.rd_morphology,
+            rd_steps: self.rd_steps,
+            flow_scale: self.flow_scale,
+            flow_swirl: self.flow_swirl,
+            effect_stack: self.effect_stack.clone(),
+        };
+
+        let json = serde_json::to_string_pretty(&manifest).map_err(|e| format!("Serialization error: {e}"))?;
+        use std::io::Write;
+        zip.start_file("project.json", options).map_err(|e| format!("ZIP entry error: {e}"))?;
+        zip.write_all(json.as_bytes()).map_err(|e| format!("ZIP write error: {e}"))?;
+
+        // 2. Encode source.png
+        let mut src_png = Vec::new();
+        {
+            let encoder = image::codecs::png::PngEncoder::new(&mut src_png);
+            image::ImageEncoder::write_image(encoder, &src.data, src.width, src.height, image::ExtendedColorType::Rgb8)
+                .map_err(|e| format!("Source PNG encoding error: {e}"))?;
+        }
+        zip.start_file("source.png", options).map_err(|e| format!("ZIP entry error: {e}"))?;
+        zip.write_all(&src_png).map_err(|e| format!("ZIP write error: {e}"))?;
+
+        // 3. Encode mask.png if active
+        if manifest.has_mask
+            && let Some(ref mask) = self.mask
+        {
+            let mut mask_png = Vec::new();
+            {
+                let encoder = image::codecs::png::PngEncoder::new(&mut mask_png);
+                image::ImageEncoder::write_image(encoder, &mask.data, mask.width, mask.height, image::ExtendedColorType::L8)
+                    .map_err(|e| format!("Mask PNG encoding error: {e}"))?;
+            }
+            zip.start_file("mask.png", options).map_err(|e| format!("ZIP entry error: {e}"))?;
+            zip.write_all(&mask_png).map_err(|e| format!("ZIP write error: {e}"))?;
+        }
+
+        zip.finish().map_err(|e| format!("ZIP finalize error: {e}"))?;
+        self.status_text = format!("Saved project bundle to {}", path.display());
+        Ok(())
+    }
+
+    /// Load a `.dithercraft` project bundle archive and restore the complete session state losslessly.
+    pub fn load_project_bundle(&mut self, path: &Path) -> Result<(), String> {
+        let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {e}"))?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("ZIP read error: {e}"))?;
+
+        use std::io::Read;
+
+        // 1. Read project.json
+        let manifest: ProjectManifest = {
+            let mut manifest_file = zip.by_name("project.json").map_err(|e| format!("Missing project.json: {e}"))?;
+            let mut content = String::new();
+            manifest_file.read_to_string(&mut content).map_err(|e| format!("Failed to read project.json: {e}"))?;
+            serde_json::from_str(&content).map_err(|e| format!("Invalid project.json: {e}"))?
+        };
+
+        // 2. Read source.png
+        let src_buf = {
+            let mut src_file = zip.by_name("source.png").map_err(|e| format!("Missing source.png: {e}"))?;
+            let mut bytes = Vec::new();
+            src_file.read_to_end(&mut bytes).map_err(|e| format!("Failed to read source.png: {e}"))?;
+            let dyn_img = image::load_from_memory(&bytes).map_err(|e| format!("Failed to decode source.png: {e}"))?;
+            let rgb = dyn_img.to_rgb8();
+            let (w, h) = rgb.dimensions();
+            ImageBuffer::from_raw(w, h, rgb.into_raw()).map_err(|e| format!("ImageBuffer creation error: {e:?}"))?
+        };
+
+        // 3. Read mask.png if present
+        let mask_buf = if manifest.has_mask
+            && let Ok(mut mask_file) = zip.by_name("mask.png")
+        {
+            let mut bytes = Vec::new();
+            if mask_file.read_to_end(&mut bytes).is_ok()
+                && let Ok(dyn_img) = image::load_from_memory(&bytes)
+            {
+                let gray = dyn_img.to_luma8();
+                let (w, h) = gray.dimensions();
+                Some(MaskBuffer { width: w, height: h, data: gray.into_raw() })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Apply manifest parameters
+        self.apply_preset(&manifest.preset);
+        self.secondary_algo = manifest.secondary_algo;
+        self.mask_blend_enabled = manifest.mask_blend_enabled;
+        self.aspect_guide = manifest.aspect_guide;
+        self.cadence_mode = manifest.cadence_mode;
+        self.cvd_mode = manifest.cvd_mode;
+        self.cmyk_dot_shape = manifest.cmyk_dot_shape;
+        self.cmyk_dot_gain = manifest.cmyk_dot_gain;
+        self.rd_morphology = manifest.rd_morphology;
+        self.rd_steps = manifest.rd_steps;
+        self.flow_scale = manifest.flow_scale;
+        self.flow_swirl = manifest.flow_swirl;
+        self.effect_stack = manifest.effect_stack;
+
+        let arc_buf = Arc::new(src_buf);
+        let (w, h) = (arc_buf.width, arc_buf.height);
+        self.source_image = Some(arc_buf.clone());
+        self.source_frames = vec![arc_buf];
+        self.frame_delays = vec![100];
+        self.timeline_max_frames = 60;
+        self.timeline_frame = 0;
+        self.source_path = Some(path.to_path_buf());
+        self.add_recent_file(path.to_path_buf());
+        self.mask = mask_buf;
+        self.ensure_buffers_dimension(w, h);
+        self.canvas_pan = egui::Vec2::ZERO;
+        self.canvas_zoom = 1.0_f32;
+        self.status_text = format!("Loaded project bundle from {}", path.display());
+        self.trigger_render();
+
+        Ok(())
+    }
+
+    pub fn save_project_bundle_dialog(&mut self) {
+        let fname = self.suggested_filename("dithercraft");
+        if let Some(path) =
+            rfd::FileDialog::new().set_file_name(&fname).add_filter("DitherCraft Project Bundle (.dithercraft)", &["dithercraft", "dcp"]).save_file()
+            && let Err(e) = self.save_project_bundle(&path)
+        {
+            self.status_text = format!("Failed to save project bundle: {e}");
+        }
+    }
+
+    pub fn open_project_bundle_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new().add_filter("DitherCraft Project Bundle (.dithercraft)", &["dithercraft", "dcp"]).pick_file()
+            && let Err(e) = self.load_project_bundle(&path)
+        {
+            self.status_text = format!("Failed to load project bundle: {e}");
+        }
+    }
+
+    pub fn open_media_dialog(&mut self) {
+        let path = rfd::FileDialog::new()
+            .add_filter(
+                "Media & Project Files",
+                &[
+                    "dithercraft",
+                    "dcp",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "webp",
+                    "bmp",
+                    "gif",
+                    "mp4",
+                    "m4v",
+                    "webm",
+                    "mkv",
+                    "tiff",
+                    "tif",
+                    "tga",
+                    "ico",
+                    "qoi",
+                    "hdr",
+                    "svg",
+                ],
+            )
+            .pick_file();
+        if let Some(path) = path {
+            self.route_dropped_path(&path);
+        }
+    }
+
+    pub fn route_dropped_path(&mut self, path: &Path) {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext.eq_ignore_ascii_case("dithercraft") || ext.eq_ignore_ascii_case("dcp") {
+            if let Err(e) = self.load_project_bundle(path) {
+                self.status_text = format!("Failed to load project bundle: {e}");
+            }
+        } else if ext.eq_ignore_ascii_case("dcpreset") {
+            if let Ok(data) = std::fs::read_to_string(path)
+                && let Ok(preset) = serde_json::from_str::<StudioPreset>(&data)
+            {
+                self.record_undo_state();
+                self.apply_preset(&preset);
+                self.status_text = format!("Loaded preset: {}", preset.name);
+                self.trigger_render();
+            } else {
+                self.status_text = format!("Failed to parse preset file: {}", path.display());
+            }
+        } else if ext.eq_ignore_ascii_case("cube") {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && let Ok(lut) = Cube3dLut::from_cube_str(&text)
+            {
+                self.custom_lut = Some(lut);
+                self.lut_enabled = true;
+                self.lut_preset_name = "Custom .cube LUT".into();
+                self.status_text = format!("Loaded 3D LUT from {}", path.display());
+                self.trigger_render();
+            } else {
+                self.status_text = format!("Failed to parse .cube LUT: {}", path.display());
+            }
+        } else if ext.eq_ignore_ascii_case("hex")
+            || ext.eq_ignore_ascii_case("gpl")
+            || ext.eq_ignore_ascii_case("pal")
+            || ext.eq_ignore_ascii_case("act")
+        {
+            if let Ok(pal) = Palette::import_from_file(path) {
+                self.selected_palette_name = pal.name.clone();
+                self.active_palette = pal;
+                self.status_text = format!("Imported palette '{}' from {}", self.active_palette.name, path.display());
+                self.trigger_render();
+            } else {
+                self.status_text = format!("Failed to parse palette: {}", path.display());
+            }
+        } else {
+            self.load_media_file(path);
+        }
+    }
+
+    pub fn route_dropped_bytes(&mut self, filename: &str, bytes: &[u8]) {
+        let ext = Path::new(filename).extension().and_then(|e| e.to_str()).unwrap_or("");
+        if (ext.eq_ignore_ascii_case("dithercraft") || ext.eq_ignore_ascii_case("dcp"))
+            && let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        {
+            use std::io::Read;
+            let maybe_manifest: Option<ProjectManifest> = {
+                if let Ok(mut manifest_file) = zip.by_name("project.json") {
+                    let mut content = String::new();
+                    if manifest_file.read_to_string(&mut content).is_ok() { serde_json::from_str(&content).ok() } else { None }
+                } else {
+                    None
+                }
+            };
+
+            let maybe_src_buf: Option<ImageBuffer> = {
+                if let Ok(mut src_file) = zip.by_name("source.png") {
+                    let mut src_bytes = Vec::new();
+                    if src_file.read_to_end(&mut src_bytes).is_ok()
+                        && let Ok(dyn_img) = image::load_from_memory(&src_bytes)
+                    {
+                        let rgb = dyn_img.to_rgb8();
+                        let (w, h) = rgb.dimensions();
+                        ImageBuffer::from_raw(w, h, rgb.into_raw()).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let (Some(manifest), Some(src_buf)) = (maybe_manifest, maybe_src_buf) {
+                let (w, h) = (src_buf.width, src_buf.height);
+                let arc_buf = Arc::new(src_buf);
+                self.apply_preset(&manifest.preset);
+                self.secondary_algo = manifest.secondary_algo;
+                self.mask_blend_enabled = manifest.mask_blend_enabled;
+                self.effect_stack = manifest.effect_stack;
+                self.source_image = Some(arc_buf.clone());
+                self.source_frames = vec![arc_buf];
+                self.ensure_buffers_dimension(w, h);
+                self.status_text = format!("Loaded project bundle '{filename}'");
+                self.trigger_render();
+                return;
+            }
+        }
+
+        if let Ok(dyn_img) = image::load_from_memory(bytes) {
+            let rgb = dyn_img.to_rgb8();
+            let (w, h) = rgb.dimensions();
+            if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                let arc_buf = Arc::new(buf);
+                self.source_image = Some(arc_buf.clone());
+                self.source_frames = vec![arc_buf];
+                self.frame_delays = vec![100];
+                self.timeline_max_frames = 60;
+                self.timeline_frame = 0;
+                self.source_path = None;
+                self.canvas_pan = egui::Vec2::ZERO;
+                self.canvas_zoom = 1.0_f32;
+                self.ensure_buffers_dimension(w, h);
+                self.status_text = format!("Loaded dropped image '{filename}' ({w}x{h})");
+                self.trigger_render();
+            }
+        }
+    }
+
+    pub fn set_workflow_mode(&mut self, mode: WorkflowLayoutMode) {
+        self.workflow_mode = mode;
+        match mode {
+            WorkflowLayoutMode::DitherStudio => {
+                self.status_text = "Switched to Dither Studio layout".into();
+            }
+            WorkflowLayoutMode::ZenFocus => {
+                self.status_text = "Zen Focus Mode: sidebars collapsed (F11 to toggle)".into();
+            }
+            WorkflowLayoutMode::PrintPrepress => {
+                self.status_text = "Print & Prepress: CMYK Halftone Screen active".into();
+                self.selected_algo = "CMYK Halftone Screen (Rosette)".into();
+                self.trigger_render();
+            }
+            WorkflowLayoutMode::CrtArcade => {
+                self.status_text = "CRT & Retro Arcade: vintage scanline & curvature simulation active".into();
+                self.crt_enabled = true;
+                self.trigger_render();
+            }
+            WorkflowLayoutMode::MaskWorkshop => {
+                self.status_text = "Mask & Vector Workshop: brush masking & dual algorithm blending active".into();
+                self.active_tool = WorkstationTool::BrushMask;
+                self.mask_blend_enabled = true;
+                self.quick_mask_active = true;
                 self.trigger_render();
             }
         }
@@ -2334,7 +2870,7 @@ impl eframe::App for DitherCraftApp {
             }
         }
 
-        // Selection Shortcuts (Ctrl+A, Ctrl+D, Ctrl+Shift+I)
+        // Selection Shortcuts (Ctrl+A, Ctrl+D, Ctrl+Shift+I) & System Clipboard / Project (Ctrl+C, Ctrl+V, Ctrl+S, Ctrl+O)
         if ctx.input(|i| i.modifiers.command || i.modifiers.ctrl) {
             if ctx.input(|i| i.key_pressed(egui::Key::A)) {
                 self.select_all();
@@ -2342,6 +2878,25 @@ impl eframe::App for DitherCraftApp {
                 self.deselect();
             } else if ctx.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::I)) {
                 self.invert_selection();
+            } else if !ctx.wants_keyboard_input() && !self.show_command_palette {
+                if ctx.input(|i| i.key_pressed(egui::Key::C)) {
+                    self.copy_rendered_image_to_clipboard();
+                } else if ctx.input(|i| i.key_pressed(egui::Key::V)) {
+                    self.paste_image_from_clipboard();
+                } else if ctx.input(|i| i.key_pressed(egui::Key::S)) {
+                    self.save_project_bundle_dialog();
+                } else if ctx.input(|i| i.key_pressed(egui::Key::O)) {
+                    self.open_media_dialog();
+                }
+            }
+        }
+
+        // Toggle Zen Focus Mode (F11)
+        if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            if self.workflow_mode == WorkflowLayoutMode::ZenFocus {
+                self.set_workflow_mode(WorkflowLayoutMode::DitherStudio);
+            } else {
+                self.set_workflow_mode(WorkflowLayoutMode::ZenFocus);
             }
         }
 
@@ -2359,12 +2914,15 @@ impl eframe::App for DitherCraftApp {
             }
         }
 
-        // Handle Drag & Drop
+        // Handle Drag & Drop Router
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if !dropped.is_empty() {
             for file in dropped {
                 if let Some(path) = file.path {
-                    self.load_media_file(&path);
+                    self.route_dropped_path(&path);
+                    break;
+                } else if let Some(bytes) = file.bytes {
+                    self.route_dropped_bytes(&file.name, &bytes);
                     break;
                 }
             }
@@ -2374,6 +2932,19 @@ impl eframe::App for DitherCraftApp {
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if ui.button("Open Media or Project (Ctrl+O)...").clicked() {
+                        self.open_media_dialog();
+                        ui.close_menu();
+                    }
+                    if ui.button("Save Project Bundle (.dithercraft) (Ctrl+S)...").clicked() {
+                        self.save_project_bundle_dialog();
+                        ui.close_menu();
+                    }
+                    if ui.button("Open Project Bundle (.dithercraft)...").clicked() {
+                        self.open_project_bundle_dialog();
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Open Image, GIF, or Video...").clicked() {
                         let path = rfd::FileDialog::new()
                             .add_filter(
@@ -3007,6 +3578,15 @@ impl eframe::App for DitherCraftApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    if ui.button("📋 Copy Rendered Image (Ctrl+C)").clicked() {
+                        self.copy_rendered_image_to_clipboard();
+                        ui.close_menu();
+                    }
+                    if ui.button("📋 Paste Image from Clipboard (Ctrl+V)").clicked() {
+                        self.paste_image_from_clipboard();
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Undo (Ctrl+Z)").clicked() {
                         self.undo();
                         ui.close_menu();
@@ -3081,6 +3661,17 @@ impl eframe::App for DitherCraftApp {
                             self.crop_dialog_open = true;
                         }
                         ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Workspace", |ui| {
+                    ui.label("Workflow Layout Presets:");
+                    for mode in WorkflowLayoutMode::ALL {
+                        let is_active = self.workflow_mode == mode;
+                        if ui.selectable_label(is_active, mode.label()).clicked() {
+                            self.set_workflow_mode(mode);
+                            ui.close_menu();
+                        }
                     }
                 });
 
@@ -3204,6 +3795,16 @@ impl eframe::App for DitherCraftApp {
                 if ui.button("📈 Curves").on_hover_text("Open Parametric Tone Curves Workshop").clicked() {
                     self.show_curves_dialog = true;
                 }
+                if ui.button(self.workflow_mode.label()).on_hover_text("Current Workflow Layout (Click to cycle)").clicked() {
+                    let next = match self.workflow_mode {
+                        WorkflowLayoutMode::DitherStudio => WorkflowLayoutMode::ZenFocus,
+                        WorkflowLayoutMode::ZenFocus => WorkflowLayoutMode::PrintPrepress,
+                        WorkflowLayoutMode::PrintPrepress => WorkflowLayoutMode::CrtArcade,
+                        WorkflowLayoutMode::CrtArcade => WorkflowLayoutMode::MaskWorkshop,
+                        WorkflowLayoutMode::MaskWorkshop => WorkflowLayoutMode::DitherStudio,
+                    };
+                    self.set_workflow_mode(next);
+                }
             });
         });
 
@@ -3315,6 +3916,26 @@ impl eframe::App for DitherCraftApp {
 
                     ui.label("Universal Command Palette");
                     ui.monospace("Ctrl+K / Cmd+K");
+                    ui.end_row();
+
+                    ui.label("Copy Rendered Image to Clipboard");
+                    ui.monospace("Ctrl+C");
+                    ui.end_row();
+
+                    ui.label("Paste Image from Clipboard");
+                    ui.monospace("Ctrl+V");
+                    ui.end_row();
+
+                    ui.label("Save Project Bundle (.dithercraft)");
+                    ui.monospace("Ctrl+S");
+                    ui.end_row();
+
+                    ui.label("Open Media or Project");
+                    ui.monospace("Ctrl+O");
+                    ui.end_row();
+
+                    ui.label("Toggle Zen Focus Mode");
+                    ui.monospace("F11");
                     ui.end_row();
                 });
                 ui.add_space(8.0);
@@ -4016,821 +4637,849 @@ impl eframe::App for DitherCraftApp {
         }
 
         // Left Control Panel
-        egui::SidePanel::left("control_panel").min_width(280.0).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(ref logo) = self.logo_texture {
-                    ui.image((logo.id(), egui::vec2(24.0, 24.0)));
-                }
-                ui.heading("DitherCraft Studio");
-            });
-            ui.separator();
-
-            let mut changed = false;
-            let mut preview_changed = false;
-
-            // Pre-Dither Tone Levels & Gamma
-            ui.group(|ui| {
+        if self.workflow_mode != WorkflowLayoutMode::ZenFocus {
+            egui::SidePanel::left("control_panel").min_width(280.0_f32).show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Input Levels & Gamma:");
-                    if ui.button("↺ Reset").on_hover_text("Reset Tone Levels (Black 0, White 255, Gamma 1.0)").clicked() {
-                        self.levels_black = 0;
-                        self.levels_white = 255;
-                        self.levels_gamma = 1.0;
-                        changed = true;
+                    if let Some(ref logo) = self.logo_texture {
+                        ui.image((logo.id(), egui::vec2(24.0, 24.0)));
                     }
+                    ui.heading("DitherCraft Studio");
                 });
-                check_slider(ui, egui::Slider::new(&mut self.levels_black, 0..=254).text("Black Point"), &mut changed, &mut preview_changed);
-                if self.levels_black >= self.levels_white {
-                    self.levels_white = self.levels_black + 1;
-                }
-                check_slider(ui, egui::Slider::new(&mut self.levels_white, 1..=255).text("White Point"), &mut changed, &mut preview_changed);
-                if self.levels_white <= self.levels_black {
-                    self.levels_black = self.levels_white.saturating_sub(1);
-                }
-                check_slider(
-                    ui,
-                    egui::Slider::new(&mut self.levels_gamma, 0.1..=3.0).text("Midtone Gamma").logarithmic(true),
-                    &mut changed,
-                    &mut preview_changed,
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("📈 Parametric Tone Curves...").on_hover_text("Open interactive monotonic Hermite tone curves workshop").clicked()
-                    {
-                        self.show_curves_dialog = true;
-                    }
-                    if !self.tone_curve.is_identity() && ui.button("↺ Reset Curve").on_hover_text("Reset tone curve to identity linear").clicked() {
-                        self.tone_curve.reset_linear();
-                        changed = true;
-                    }
-                });
-            });
+                ui.separator();
 
-            // Workstation Tools, Masking & Selection
-            ui.group(|ui| {
-                ui.label("Workstation Tools & Masking:");
-                ui.horizontal_wrapped(|ui| {
-                    for tool in WorkstationTool::ALL {
-                        if ui.selectable_label(self.active_tool == tool, tool.label()).clicked() {
-                            self.active_tool = tool;
+                let mut changed = false;
+                let mut preview_changed = false;
+
+                // Pre-Dither Tone Levels & Gamma
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Input Levels & Gamma:");
+                        if ui.button("↺ Reset").on_hover_text("Reset Tone Levels (Black 0, White 255, Gamma 1.0)").clicked() {
+                            self.levels_black = 0;
+                            self.levels_white = 255;
+                            self.levels_gamma = 1.0;
+                            changed = true;
+                        }
+                    });
+                    check_slider(ui, egui::Slider::new(&mut self.levels_black, 0..=254).text("Black Point"), &mut changed, &mut preview_changed);
+                    if self.levels_black >= self.levels_white {
+                        self.levels_white = self.levels_black + 1;
+                    }
+                    check_slider(ui, egui::Slider::new(&mut self.levels_white, 1..=255).text("White Point"), &mut changed, &mut preview_changed);
+                    if self.levels_white <= self.levels_black {
+                        self.levels_black = self.levels_white.saturating_sub(1);
+                    }
+                    check_slider(
+                        ui,
+                        egui::Slider::new(&mut self.levels_gamma, 0.1..=3.0).text("Midtone Gamma").logarithmic(true),
+                        &mut changed,
+                        &mut preview_changed,
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("📈 Parametric Tone Curves...")
+                            .on_hover_text("Open interactive monotonic Hermite tone curves workshop")
+                            .clicked()
+                        {
+                            self.show_curves_dialog = true;
+                        }
+                        if !self.tone_curve.is_identity() && ui.button("↺ Reset Curve").on_hover_text("Reset tone curve to identity linear").clicked()
+                        {
+                            self.tone_curve.reset_linear();
+                            changed = true;
+                        }
+                    });
+                });
+
+                // Workstation Tools, Masking & Selection
+                ui.group(|ui| {
+                    ui.label("Workstation Tools & Masking:");
+                    ui.horizontal_wrapped(|ui| {
+                        for tool in WorkstationTool::ALL {
+                            if ui.selectable_label(self.active_tool == tool, tool.label()).clicked() {
+                                self.active_tool = tool;
+                            }
+                        }
+                    });
+
+                    match self.active_tool {
+                        WorkstationTool::BrushMask | WorkstationTool::EraserMask => {
+                            ui.horizontal(|ui| {
+                                ui.label("Radius:");
+                                ui.add(egui::Slider::new(&mut self.brush_radius, 1.0..=128.0).text("px"));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Falloff:");
+                                ui.add(egui::Slider::new(&mut self.brush_falloff, 0.0..=1.0).text("Hardness"));
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("Linear Grad").on_hover_text("Apply procedural linear gradient to mask").clicked()
+                                    && let Some(ref mut m) = self.mask
+                                {
+                                    m.apply_linear_gradient(0.0, 0.0, m.width as f32, 0.0);
+                                    if self.mask_blend_enabled {
+                                        changed = true;
+                                    } else {
+                                        self.update_texture(ctx);
+                                    }
+                                }
+                                if ui.button("Radial Grad").on_hover_text("Apply procedural radial gradient to mask").clicked()
+                                    && let Some(ref mut m) = self.mask
+                                {
+                                    let cx = m.width as f32 * 0.5;
+                                    let cy = m.height as f32 * 0.5;
+                                    m.apply_radial_gradient(cx, cy, 0.0, cx.min(cy));
+                                    if self.mask_blend_enabled {
+                                        changed = true;
+                                    } else {
+                                        self.update_texture(ctx);
+                                    }
+                                }
+                                if ui.button("Invert").on_hover_text("Invert alpha mask").clicked()
+                                    && let Some(ref mut m) = self.mask
+                                {
+                                    m.invert();
+                                    if self.mask_blend_enabled {
+                                        changed = true;
+                                    } else {
+                                        self.update_texture(ctx);
+                                    }
+                                }
+                                if ui.button("Clear").on_hover_text("Clear mask to 0").clicked()
+                                    && let Some(ref mut m) = self.mask
+                                {
+                                    m.clear();
+                                    if self.mask_blend_enabled {
+                                        changed = true;
+                                    } else {
+                                        self.update_texture(ctx);
+                                    }
+                                }
+                            });
+                            if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
+                                self.update_texture(ctx);
+                            }
+                        }
+                        WorkstationTool::RectMarquee | WorkstationTool::EllipseMarquee | WorkstationTool::Lasso | WorkstationTool::MagicWand => {
+                            ui.horizontal(|ui| {
+                                ui.label("Mode:");
+                                egui::ComboBox::from_id_salt("selection_mode_combo")
+                                    .selected_text(match self.selection_mode {
+                                        SelectionMode::New => "New",
+                                        SelectionMode::Add => "Add (+)",
+                                        SelectionMode::Subtract => "Subtract (-)",
+                                        SelectionMode::Intersect => "Intersect (∩)",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::New, "New");
+                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::Add, "Add (+)");
+                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::Subtract, "Subtract (-)");
+                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::Intersect, "Intersect (∩)");
+                                    });
+                            });
+                            if self.active_tool == WorkstationTool::MagicWand {
+                                ui.horizontal(|ui| {
+                                    ui.label("Wand Tolerance:");
+                                    ui.add(egui::Slider::new(&mut self.wand_tolerance, 0.01..=0.50).text("OKLab ΔE"));
+                                });
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("Select All").clicked() {
+                                    self.select_all();
+                                }
+                                if ui.button("Deselect").clicked() {
+                                    self.deselect();
+                                }
+                                if ui.button("Invert").clicked() {
+                                    self.invert_selection();
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("Selection ➔ Mask").on_hover_text("Bake active marquee selection into mask").clicked() {
+                                    self.convert_selection_to_mask();
+                                    if self.mask_blend_enabled {
+                                        changed = true;
+                                    } else {
+                                        self.update_texture(ctx);
+                                    }
+                                }
+                                if ui.button("Mask ➔ Selection").on_hover_text("Extract marquee selection from mask threshold").clicked() {
+                                    self.convert_mask_to_selection();
+                                }
+                            });
+                        }
+                        WorkstationTool::Pointer => {
+                            ui.label("Drag canvas to pan, scroll to zoom.");
+                            if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
+                                self.update_texture(ctx);
+                            }
                         }
                     }
+
+                    // Dual-Algorithm Spatial Blending
+                    ui.separator();
+                    if ui.checkbox(&mut self.mask_blend_enabled, "Dual-Algorithm Mask Blending").changed() {
+                        changed = true;
+                    }
+                    if self.mask_blend_enabled {
+                        ui.horizontal(|ui| {
+                            ui.label("Secondary:");
+                            egui::ComboBox::from_id_salt("secondary_algo_picker").width(180.0).selected_text(&self.secondary_algo).show_ui(
+                                ui,
+                                |ui| {
+                                    for info in dither_core::algorithms::ALL_ALGORITHMS.iter() {
+                                        if ui.selectable_value(&mut self.secondary_algo, info.name.to_string(), info.name).clicked() {
+                                            changed = true;
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                        ui.label(egui::RichText::new("Primary algo applies to Mask > 0; Secondary applies to Mask = 0.").italics().size(10.5));
+                    }
                 });
 
-                match self.active_tool {
-                    WorkstationTool::BrushMask | WorkstationTool::EraserMask => {
-                        ui.horizontal(|ui| {
-                            ui.label("Radius:");
-                            ui.add(egui::Slider::new(&mut self.brush_radius, 1.0..=128.0).text("px"));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Falloff:");
-                            ui.add(egui::Slider::new(&mut self.brush_falloff, 0.0..=1.0).text("Hardness"));
-                        });
-                        ui.horizontal(|ui| {
-                            if ui.button("Linear Grad").on_hover_text("Apply procedural linear gradient to mask").clicked()
-                                && let Some(ref mut m) = self.mask
-                            {
-                                m.apply_linear_gradient(0.0, 0.0, m.width as f32, 0.0);
-                                if self.mask_blend_enabled {
-                                    changed = true;
-                                } else {
-                                    self.update_texture(ctx);
-                                }
-                            }
-                            if ui.button("Radial Grad").on_hover_text("Apply procedural radial gradient to mask").clicked()
-                                && let Some(ref mut m) = self.mask
-                            {
-                                let cx = m.width as f32 * 0.5;
-                                let cy = m.height as f32 * 0.5;
-                                m.apply_radial_gradient(cx, cy, 0.0, cx.min(cy));
-                                if self.mask_blend_enabled {
-                                    changed = true;
-                                } else {
-                                    self.update_texture(ctx);
-                                }
-                            }
-                            if ui.button("Invert").on_hover_text("Invert alpha mask").clicked()
-                                && let Some(ref mut m) = self.mask
-                            {
-                                m.invert();
-                                if self.mask_blend_enabled {
-                                    changed = true;
-                                } else {
-                                    self.update_texture(ctx);
-                                }
-                            }
-                            if ui.button("Clear").on_hover_text("Clear mask to 0").clicked()
-                                && let Some(ref mut m) = self.mask
-                            {
-                                m.clear();
-                                if self.mask_blend_enabled {
-                                    changed = true;
-                                } else {
-                                    self.update_texture(ctx);
-                                }
-                            }
-                        });
-                        if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
-                            self.update_texture(ctx);
+                // Algorithm Search & Picker
+                ui.group(|ui| {
+                    ui.label("Dithering Algorithm:");
+                    ui.horizontal(|ui| {
+                        ui.label("Search:");
+                        ui.text_edit_singleline(&mut self.algo_search_query);
+                    });
+
+                    let query = self.algo_search_query.to_lowercase();
+                    let filtered: Vec<_> = dither_core::algorithms::ALL_ALGORITHMS
+                        .iter()
+                        .filter(|info| query.is_empty() || info.name.to_lowercase().contains(&query))
+                        .collect();
+
+                    egui::ComboBox::from_id_salt("algo_picker").width(240.0).selected_text(&self.selected_algo).show_ui(ui, |ui| {
+                        if (query.is_empty() || "tonal band multi-dither".contains(&query))
+                            && ui.selectable_value(&mut self.selected_algo, "Tonal Band Multi-Dither".into(), "Tonal Band Multi-Dither").clicked()
+                        {
+                            changed = true;
                         }
-                    }
-                    WorkstationTool::RectMarquee | WorkstationTool::EllipseMarquee | WorkstationTool::Lasso | WorkstationTool::MagicWand => {
+                        if (query.is_empty() || "custom threshold matrix".contains(&query))
+                            && ui.selectable_value(&mut self.selected_algo, "Custom Threshold Matrix".into(), "Custom Threshold Matrix").clicked()
+                        {
+                            changed = true;
+                        }
+                        if (query.is_empty() || "morphogenesis (reaction-diffusion)".contains(&query))
+                            && ui
+                                .selectable_value(
+                                    &mut self.selected_algo,
+                                    "Morphogenesis (Reaction-Diffusion)".into(),
+                                    "Morphogenesis (Reaction-Diffusion)",
+                                )
+                                .clicked()
+                        {
+                            changed = true;
+                        }
+                        if (query.is_empty() || "vector flow field".contains(&query))
+                            && ui.selectable_value(&mut self.selected_algo, "Vector Flow Field".into(), "Vector Flow Field").clicked()
+                        {
+                            changed = true;
+                        }
+                        for info in filtered {
+                            if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
+                                changed = true;
+                            }
+                        }
+                    });
+
+                    if self.selected_algo.to_lowercase().contains("cmyk") {
+                        ui.separator();
+                        ui.label("CMYK Rosette Halftone Controls:");
                         ui.horizontal(|ui| {
-                            ui.label("Mode:");
-                            egui::ComboBox::from_id_salt("selection_mode_combo")
-                                .selected_text(match self.selection_mode {
-                                    SelectionMode::New => "New",
-                                    SelectionMode::Add => "Add (+)",
-                                    SelectionMode::Subtract => "Subtract (-)",
-                                    SelectionMode::Intersect => "Intersect (∩)",
+                            ui.label("Dot Shape:");
+                            egui::ComboBox::from_id_salt("cmyk_dot_shape")
+                                .selected_text(match self.cmyk_dot_shape {
+                                    HalftoneDotShape::EuclideanRound => "Euclidean Round",
+                                    HalftoneDotShape::Elliptical => "Elliptical",
+                                    HalftoneDotShape::Diamond => "Diamond",
+                                    HalftoneDotShape::Line => "Line",
                                 })
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::New, "New");
-                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Add, "Add (+)");
-                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Subtract, "Subtract (-)");
-                                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Intersect, "Intersect (∩)");
+                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::EuclideanRound, "Euclidean Round").clicked() {
+                                        changed = true;
+                                    }
+                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Elliptical, "Elliptical").clicked() {
+                                        changed = true;
+                                    }
+                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Diamond, "Diamond").clicked() {
+                                        changed = true;
+                                    }
+                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Line, "Line").clicked() {
+                                        changed = true;
+                                    }
                                 });
                         });
-                        if self.active_tool == WorkstationTool::MagicWand {
-                            ui.horizontal(|ui| {
-                                ui.label("Wand Tolerance:");
-                                ui.add(egui::Slider::new(&mut self.wand_tolerance, 0.01..=0.50).text("OKLab ΔE"));
-                            });
-                        }
                         ui.horizontal(|ui| {
-                            if ui.button("Select All").clicked() {
-                                self.select_all();
-                            }
-                            if ui.button("Deselect").clicked() {
-                                self.deselect();
-                            }
-                            if ui.button("Invert").clicked() {
-                                self.invert_selection();
-                            }
+                            ui.label("Dot Gain:");
+                            let slider = egui::Slider::new(&mut self.cmyk_dot_gain, -0.2..=0.4)
+                                .text("% gain")
+                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0));
+                            check_slider(ui, slider, &mut changed, &mut preview_changed);
                         });
+                    }
+
+                    if self.selected_algo.to_lowercase().contains("tonal band") {
+                        ui.separator();
+                        ui.label("Tonal Band Multi-Dither Controls:");
                         ui.horizontal(|ui| {
-                            if ui.button("Selection ➔ Mask").on_hover_text("Bake active marquee selection into mask").clicked() {
-                                self.convert_selection_to_mask();
-                                if self.mask_blend_enabled {
-                                    changed = true;
-                                } else {
-                                    self.update_texture(ctx);
-                                }
-                            }
-                            if ui.button("Mask ➔ Selection").on_hover_text("Extract marquee selection from mask threshold").clicked() {
-                                self.convert_mask_to_selection();
-                            }
-                        });
-                    }
-                    WorkstationTool::Pointer => {
-                        ui.label("Drag canvas to pan, scroll to zoom.");
-                        if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
-                            self.update_texture(ctx);
-                        }
-                    }
-                }
-
-                // Dual-Algorithm Spatial Blending
-                ui.separator();
-                if ui.checkbox(&mut self.mask_blend_enabled, "Dual-Algorithm Mask Blending").changed() {
-                    changed = true;
-                }
-                if self.mask_blend_enabled {
-                    ui.horizontal(|ui| {
-                        ui.label("Secondary:");
-                        egui::ComboBox::from_id_salt("secondary_algo_picker").width(180.0).selected_text(&self.secondary_algo).show_ui(ui, |ui| {
-                            for info in dither_core::algorithms::ALL_ALGORITHMS.iter() {
-                                if ui.selectable_value(&mut self.secondary_algo, info.name.to_string(), info.name).clicked() {
-                                    changed = true;
-                                }
-                            }
-                        });
-                    });
-                    ui.label(egui::RichText::new("Primary algo applies to Mask > 0; Secondary applies to Mask = 0.").italics().size(10.5));
-                }
-            });
-
-            // Algorithm Search & Picker
-            ui.group(|ui| {
-                ui.label("Dithering Algorithm:");
-                ui.horizontal(|ui| {
-                    ui.label("Search:");
-                    ui.text_edit_singleline(&mut self.algo_search_query);
-                });
-
-                let query = self.algo_search_query.to_lowercase();
-                let filtered: Vec<_> = dither_core::algorithms::ALL_ALGORITHMS
-                    .iter()
-                    .filter(|info| query.is_empty() || info.name.to_lowercase().contains(&query))
-                    .collect();
-
-                egui::ComboBox::from_id_salt("algo_picker").width(240.0).selected_text(&self.selected_algo).show_ui(ui, |ui| {
-                    if (query.is_empty() || "tonal band multi-dither".contains(&query))
-                        && ui.selectable_value(&mut self.selected_algo, "Tonal Band Multi-Dither".into(), "Tonal Band Multi-Dither").clicked()
-                    {
-                        changed = true;
-                    }
-                    if (query.is_empty() || "custom threshold matrix".contains(&query))
-                        && ui.selectable_value(&mut self.selected_algo, "Custom Threshold Matrix".into(), "Custom Threshold Matrix").clicked()
-                    {
-                        changed = true;
-                    }
-                    if (query.is_empty() || "morphogenesis (reaction-diffusion)".contains(&query))
-                        && ui
-                            .selectable_value(
-                                &mut self.selected_algo,
-                                "Morphogenesis (Reaction-Diffusion)".into(),
-                                "Morphogenesis (Reaction-Diffusion)",
-                            )
-                            .clicked()
-                    {
-                        changed = true;
-                    }
-                    if (query.is_empty() || "vector flow field".contains(&query))
-                        && ui.selectable_value(&mut self.selected_algo, "Vector Flow Field".into(), "Vector Flow Field").clicked()
-                    {
-                        changed = true;
-                    }
-                    for info in filtered {
-                        if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
-                            changed = true;
-                        }
-                    }
-                });
-
-                if self.selected_algo.to_lowercase().contains("cmyk") {
-                    ui.separator();
-                    ui.label("CMYK Rosette Halftone Controls:");
-                    ui.horizontal(|ui| {
-                        ui.label("Dot Shape:");
-                        egui::ComboBox::from_id_salt("cmyk_dot_shape")
-                            .selected_text(match self.cmyk_dot_shape {
-                                HalftoneDotShape::EuclideanRound => "Euclidean Round",
-                                HalftoneDotShape::Elliptical => "Elliptical",
-                                HalftoneDotShape::Diamond => "Diamond",
-                                HalftoneDotShape::Line => "Line",
-                            })
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::EuclideanRound, "Euclidean Round").clicked() {
-                                    changed = true;
-                                }
-                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Elliptical, "Elliptical").clicked() {
-                                    changed = true;
-                                }
-                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Diamond, "Diamond").clicked() {
-                                    changed = true;
-                                }
-                                if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Line, "Line").clicked() {
-                                    changed = true;
-                                }
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Dot Gain:");
-                        let slider = egui::Slider::new(&mut self.cmyk_dot_gain, -0.2..=0.4)
-                            .text("% gain")
-                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0));
-                        check_slider(ui, slider, &mut changed, &mut preview_changed);
-                    });
-                }
-
-                if self.selected_algo.to_lowercase().contains("tonal band") {
-                    ui.separator();
-                    ui.label("Tonal Band Multi-Dither Controls:");
-                    ui.horizontal(|ui| {
-                        ui.label("Shadows:");
-                        egui::ComboBox::from_id_salt("tonal_shadow_algo").selected_text(&self.tonal_shadow_algo).show_ui(ui, |ui| {
-                            for name in ["Bayer 8x8", "Bayer 4x4", "Floyd-Steinberg", "Atkinson", "Stucki", "Jarvis-Judice-Ninke"] {
-                                if ui.selectable_value(&mut self.tonal_shadow_algo, name.into(), name).clicked() {
-                                    changed = true;
-                                }
-                            }
-                        });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Midtones:");
-                        egui::ComboBox::from_id_salt("tonal_mid_algo").selected_text(&self.tonal_mid_algo).show_ui(ui, |ui| {
-                            for name in ["Floyd-Steinberg", "Atkinson", "Burkes", "Sierra-3", "Bayer 8x8", "Interleaved Gradient Noise"] {
-                                if ui.selectable_value(&mut self.tonal_mid_algo, name.into(), name).clicked() {
-                                    changed = true;
-                                }
-                            }
-                        });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Highlights:");
-                        egui::ComboBox::from_id_salt("tonal_hi_algo").selected_text(&self.tonal_highlight_algo).show_ui(ui, |ui| {
-                            for name in ["Atkinson", "Floyd-Steinberg", "Bayer 4x4", "Bayer 8x8", "Ostromoukhov", "Riemersma"] {
-                                if ui.selectable_value(&mut self.tonal_highlight_algo, name.into(), name).clicked() {
-                                    changed = true;
-                                }
-                            }
-                        });
-                    });
-                    check_slider(
-                        ui,
-                        egui::Slider::new(&mut self.tonal_shadow_threshold, 10..=128).text("Shadow Split"),
-                        &mut changed,
-                        &mut preview_changed,
-                    );
-                    check_slider(
-                        ui,
-                        egui::Slider::new(&mut self.tonal_highlight_threshold, 129..=245).text("Highlight Split"),
-                        &mut changed,
-                        &mut preview_changed,
-                    );
-                    check_slider(ui, egui::Slider::new(&mut self.tonal_feather, 2..=48).text("Feathering"), &mut changed, &mut preview_changed);
-                }
-
-                if self.selected_algo.to_lowercase().contains("custom") {
-                    ui.separator();
-                    ui.label("Custom Matrix Workshop:");
-                    ui.label(format!("Active Matrix: {} ({}x{})", self.custom_matrix.name, self.custom_matrix.width, self.custom_matrix.height));
-                    ui.horizontal(|ui| {
-                        if ui.button("Spiral 4x4").clicked() {
-                            self.custom_matrix = CustomMatrixDither::default();
-                            changed = true;
-                        }
-                        if ui.button("Checker 2x2").clicked()
-                            && let Ok(m) = CustomMatrixDither::new("Checker 2x2", 2, 2, vec![64, 192, 192, 64])
-                        {
-                            self.custom_matrix = m;
-                            changed = true;
-                        }
-                        if ui.button("Bayer 4x4").clicked() {
-                            let bayer = vec![0, 128, 32, 160, 192, 64, 224, 96, 48, 176, 16, 144, 240, 112, 208, 80];
-                            if let Ok(m) = CustomMatrixDither::new("Bayer 4x4 Variant", 4, 4, bayer) {
-                                self.custom_matrix = m;
-                                changed = true;
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button("Import JSON...").clicked()
-                            && let Some(path) = rfd::FileDialog::new().add_filter("JSON Matrix", &["json"]).pick_file()
-                            && let Ok(json) = std::fs::read_to_string(&path)
-                            && let Ok(m) = CustomMatrixDither::from_json(&json)
-                        {
-                            self.status_text = format!("Imported matrix: {} ({}x{})", m.name, m.width, m.height);
-                            self.custom_matrix = m;
-                            changed = true;
-                        }
-                        if ui.button("Export JSON...").clicked() {
-                            let fname = format!("{}.json", self.custom_matrix.name.to_lowercase().replace(' ', "-"));
-                            if let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("JSON Matrix", &["json"]).save_file()
-                                && let Ok(json) = self.custom_matrix.to_json()
-                            {
-                                let _ = std::fs::write(&path, json);
-                                self.status_text = format!("Exported matrix to {}", path.display());
-                            }
-                        }
-                    });
-                }
-
-                if self.selected_algo.to_lowercase().contains("morphogenesis") || self.selected_algo.to_lowercase().contains("reaction-diffusion") {
-                    ui.separator();
-                    ui.label("Reaction-Diffusion Morphogenesis:");
-                    ui.horizontal(|ui| {
-                        ui.label("Regime:");
-                        egui::ComboBox::from_id_salt("rd_morphology")
-                            .selected_text(match self.rd_morphology {
-                                ReactionDiffusionMorphology::Labyrinth => "Labyrinth",
-                                ReactionDiffusionMorphology::Spots => "Leopard Spots",
-                                ReactionDiffusionMorphology::Solitons => "Soliton Wavelets",
-                                ReactionDiffusionMorphology::PulsatingWaves => "Pulsating Waves",
-                                ReactionDiffusionMorphology::Fingerprints => "Fingerprint Ridges",
-                                ReactionDiffusionMorphology::Coral => "Branching Coral",
-                                _ => "Labyrinth",
-                            })
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Labyrinth, "Labyrinth").clicked() {
-                                    changed = true;
-                                }
-                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Spots, "Leopard Spots").clicked() {
-                                    changed = true;
-                                }
-                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Solitons, "Soliton Wavelets").clicked() {
-                                    changed = true;
-                                }
-                                if ui
-                                    .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::PulsatingWaves, "Pulsating Waves")
-                                    .clicked()
-                                {
-                                    changed = true;
-                                }
-                                if ui
-                                    .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Fingerprints, "Fingerprint Ridges")
-                                    .clicked()
-                                {
-                                    changed = true;
-                                }
-                                if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Coral, "Branching Coral").clicked() {
-                                    changed = true;
-                                }
-                            });
-                    });
-                    check_slider(ui, egui::Slider::new(&mut self.rd_steps, 10..=200).text("PDE Steps"), &mut changed, &mut preview_changed);
-                }
-
-                if self.selected_algo.to_lowercase().contains("flow field") || self.selected_algo.to_lowercase().contains("vector flow") {
-                    ui.separator();
-                    ui.label("Vector Flow Field Steered Controls:");
-                    check_slider(ui, egui::Slider::new(&mut self.flow_scale, 0.005..=0.20).text("Noise Scale"), &mut changed, &mut preview_changed);
-                    check_slider(ui, egui::Slider::new(&mut self.flow_swirl, 0.0..=5.0).text("Vortex Swirl"), &mut changed, &mut preview_changed);
-                }
-            });
-
-            // Palette Controls & Color Science
-            ui.group(|ui| {
-                ui.label("Target Palette & Metric:");
-                let palettes = ["Monochrome", "Macintosh 1-bit", "Game Boy", "CGA Mode 1", "Cyberpunk", "Apple II", "Commodore 64", "NES", "PICO-8"];
-                egui::ComboBox::from_id_salt("palette_picker").selected_text(&self.selected_palette_name).show_ui(ui, |ui| {
-                    for p in palettes {
-                        if ui.selectable_label(self.selected_palette_name == p, p).clicked() {
-                            self.selected_palette_name = p.into();
-                            let metric = self.active_palette.metric;
-                            self.active_palette = match p {
-                                "Monochrome" => Palette::monochrome(),
-                                "Macintosh 1-bit" => Palette::mac_1bit(),
-                                "CGA Mode 1" => Palette::cga_mode_1(),
-                                "Cyberpunk" => Palette::cyberpunk(),
-                                "Apple II" => Palette::apple_ii(),
-                                "Commodore 64" => Palette::commodore_64(),
-                                "NES" => Palette::nes(),
-                                "PICO-8" => Palette::pico_8(),
-                                _ => Palette::game_boy(),
-                            };
-                            self.active_palette.metric = metric;
-                            changed = true;
-                        }
-                    }
-                });
-
-                // Color Metric Selection
-                egui::ComboBox::from_id_salt("color_metric_picker")
-                    .selected_text(match self.active_palette.metric {
-                        ColorMetric::Redmean => "Redmean (Perceptual)",
-                        ColorMetric::EuclideanRgb => "Euclidean RGB",
-                        ColorMetric::CieLab => "CIELAB ΔE*",
-                        ColorMetric::Oklab => "OKLab (Perceptual)",
-                        ColorMetric::Ciede2000 => "CIEDE2000 ΔE00",
-                    })
-                    .show_ui(ui, |ui| {
-                        for (metric, label) in [
-                            (ColorMetric::Oklab, "OKLab (Perceptual)"),
-                            (ColorMetric::Ciede2000, "CIEDE2000 ΔE00"),
-                            (ColorMetric::Redmean, "Redmean (Perceptual)"),
-                            (ColorMetric::EuclideanRgb, "Euclidean RGB"),
-                            (ColorMetric::CieLab, "CIELAB ΔE*"),
-                        ] {
-                            if ui.selectable_value(&mut self.active_palette.metric, metric, label).clicked() {
-                                changed = true;
-                            }
-                        }
-                    });
-
-                ui.horizontal(|ui| {
-                    if ui.button("Sort Lum").clicked() {
-                        self.active_palette.sort_by_luminance(true);
-                        changed = true;
-                    }
-                    if ui.button("Randomize").clicked() {
-                        self.active_palette.randomize_unlocked(Instant::now().elapsed().as_nanos() as u64);
-                        changed = true;
-                    }
-                    if ui.button("Prune Dead").on_hover_text("Prune unlocked swatches with <0.1% usage").clicked()
-                        && !self.swatch_percentages.is_empty()
-                        && self.active_palette.swatches.len() == self.swatch_percentages.len()
-                    {
-                        let mut pruned = Vec::new();
-                        for (i, swatch) in self.active_palette.swatches.iter().enumerate() {
-                            let pct = self.swatch_percentages.get(i).copied().unwrap_or(0.0);
-                            if swatch.locked || pct >= 0.1 {
-                                pruned.push(*swatch);
-                            }
-                        }
-                        if !pruned.is_empty() && pruned.len() < self.active_palette.swatches.len() {
-                            self.active_palette.swatches = pruned;
-                            changed = true;
-                        }
-                    }
-                });
-
-                // Swatches list with live color pickers, locks, utilization, and add/remove buttons
-                ui.label("Swatches & Live Palette Editing:");
-                let mut lock_changed = false;
-                let mut delete_idx = None;
-                let num_swatches = self.active_palette.swatches.len();
-                for (idx, swatch) in self.active_palette.swatches.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        let mut rgb = [swatch.color.r, swatch.color.g, swatch.color.b];
-                        if ui.color_edit_button_srgb(&mut rgb).changed() {
-                            swatch.color = RgbColor::new(rgb[0], rgb[1], rgb[2]);
-                            lock_changed = true;
-                        }
-                        if ui.checkbox(&mut swatch.locked, "Lock").changed() {
-                            lock_changed = true;
-                        }
-                        if let Some(&pct) = self.swatch_percentages.get(idx) {
-                            ui.label(format!("{pct:4.1}%"));
-                        }
-                        if num_swatches > 1 && ui.small_button("✕").on_hover_text("Remove swatch").clicked() {
-                            delete_idx = Some(idx);
-                        }
-                    });
-                }
-                if let Some(d) = delete_idx {
-                    self.active_palette.swatches.remove(d);
-                    changed = true;
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("+ Add Swatch").clicked() {
-                        self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
-                        changed = true;
-                    }
-                    if ui.button("🎨 Harmonies...").on_hover_text("Generate balanced OKLCH perceptual harmonies").clicked() {
-                        self.show_harmonies_dialog = true;
-                    }
-                    if ui.button("💾 Export...").clicked() {
-                        let fname = format!("{}.gpl", self.active_palette.name.to_lowercase().replace(' ', "-"));
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(&fname)
-                            .add_filter("GIMP Palette (.gpl)", &["gpl"])
-                            .add_filter("Color Table (.act)", &["act"])
-                            .add_filter("Hex Palette (.hex)", &["hex"])
-                            .add_filter("JASC-PAL (.pal)", &["pal"])
-                            .add_filter("JSON Palette (.json)", &["json"])
-                            .save_file()
-                            && let Ok(()) = self.active_palette.export_to_file(&path)
-                        {
-                            self.status_text = format!("Exported palette to {}", path.display());
-                        }
-                    }
-                });
-                if lock_changed {
-                    changed = true;
-                }
-            });
-
-            // Tonal Cycling
-            ui.group(|ui| {
-                ui.label("Tonal Cycling:");
-                check_slider(ui, egui::Slider::new(&mut self.tonal_cycle_step, 0..=8).text("Cycle Step"), &mut changed, &mut preview_changed);
-            });
-
-            // Phase 8.2: Draggable & Reorderable Downstream Effects Stack
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Downstream Effects Stack (Layers):");
-                    if ui.button("🎲 Shuffle").on_hover_text("Randomize retro glitch, CRT, and bloom adjustments").clicked() {
-                        self.shuffle_adjustments();
-                        changed = true;
-                    }
-                    if ui.button("↺ Reset").on_hover_text("Reset stack to defaults").clicked() {
-                        self.effect_stack = EffectStack::default_stack();
-                        changed = true;
-                    }
-                });
-
-                let mut move_up = None;
-                let mut move_down = None;
-                let mut duplicate_node = None;
-                let mut delete_node = None;
-                let num_nodes = self.effect_stack.nodes.len();
-
-                for (idx, node) in self.effect_stack.nodes.iter_mut().enumerate() {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            changed |= ui.checkbox(&mut node.enabled, "").changed();
-                            ui.strong(&node.name);
-
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("🗑").on_hover_text("Delete layer").clicked() {
-                                    delete_node = Some(idx);
-                                }
-                                if ui.small_button("📋").on_hover_text("Duplicate layer").clicked() {
-                                    duplicate_node = Some(idx);
-                                }
-                                if idx + 1 < num_nodes && ui.small_button("⬇").on_hover_text("Move down").clicked() {
-                                    move_down = Some(idx);
-                                }
-                                if idx > 0 && ui.small_button("⬆").on_hover_text("Move up").clicked() {
-                                    move_up = Some(idx);
-                                }
-                            });
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Blend:");
-                            egui::ComboBox::from_id_salt(format!("blend_{}", node.id)).selected_text(node.blend_mode.name()).show_ui(ui, |ui| {
-                                for mode in BlendMode::ALL {
-                                    if ui.selectable_value(&mut node.blend_mode, mode, mode.name()).clicked() {
+                            ui.label("Shadows:");
+                            egui::ComboBox::from_id_salt("tonal_shadow_algo").selected_text(&self.tonal_shadow_algo).show_ui(ui, |ui| {
+                                for name in ["Bayer 8x8", "Bayer 4x4", "Floyd-Steinberg", "Atkinson", "Stucki", "Jarvis-Judice-Ninke"] {
+                                    if ui.selectable_value(&mut self.tonal_shadow_algo, name.into(), name).clicked() {
                                         changed = true;
                                     }
                                 }
                             });
-                            ui.label("α:");
-                            check_slider(ui, egui::Slider::new(&mut node.opacity, 0.0..=1.0).show_value(true), &mut changed, &mut preview_changed);
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Midtones:");
+                            egui::ComboBox::from_id_salt("tonal_mid_algo").selected_text(&self.tonal_mid_algo).show_ui(ui, |ui| {
+                                for name in ["Floyd-Steinberg", "Atkinson", "Burkes", "Sierra-3", "Bayer 8x8", "Interleaved Gradient Noise"] {
+                                    if ui.selectable_value(&mut self.tonal_mid_algo, name.into(), name).clicked() {
+                                        changed = true;
+                                    }
+                                }
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Highlights:");
+                            egui::ComboBox::from_id_salt("tonal_hi_algo").selected_text(&self.tonal_highlight_algo).show_ui(ui, |ui| {
+                                for name in ["Atkinson", "Floyd-Steinberg", "Bayer 4x4", "Bayer 8x8", "Ostromoukhov", "Riemersma"] {
+                                    if ui.selectable_value(&mut self.tonal_highlight_algo, name.into(), name).clicked() {
+                                        changed = true;
+                                    }
+                                }
+                            });
+                        });
+                        check_slider(
+                            ui,
+                            egui::Slider::new(&mut self.tonal_shadow_threshold, 10..=128).text("Shadow Split"),
+                            &mut changed,
+                            &mut preview_changed,
+                        );
+                        check_slider(
+                            ui,
+                            egui::Slider::new(&mut self.tonal_highlight_threshold, 129..=245).text("Highlight Split"),
+                            &mut changed,
+                            &mut preview_changed,
+                        );
+                        check_slider(ui, egui::Slider::new(&mut self.tonal_feather, 2..=48).text("Feathering"), &mut changed, &mut preview_changed);
+                    }
 
-                        // Layer-specific parameter editors
-                        match &mut node.kind {
-                            EffectKind::Glow(glow) => {
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut glow.threshold, 50..=250).text("Threshold"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
-                                check_slider(ui, egui::Slider::new(&mut glow.radius, 1..=12).text("Radius"), &mut changed, &mut preview_changed);
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut glow.intensity, 0.1..=2.0).text("Intensity"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
+                    if self.selected_algo.to_lowercase().contains("custom") {
+                        ui.separator();
+                        ui.label("Custom Matrix Workshop:");
+                        ui.label(format!("Active Matrix: {} ({}x{})", self.custom_matrix.name, self.custom_matrix.width, self.custom_matrix.height));
+                        ui.horizontal(|ui| {
+                            if ui.button("Spiral 4x4").clicked() {
+                                self.custom_matrix = CustomMatrixDither::default();
+                                changed = true;
                             }
-                            EffectKind::Chromatic(chroma) => {
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut chroma.shift_x, -15..=15).text("Shift X"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
-                                changed |= ui.checkbox(&mut chroma.radial, "Radial Shift").changed();
+                            if ui.button("Checker 2x2").clicked()
+                                && let Ok(m) = CustomMatrixDither::new("Checker 2x2", 2, 2, vec![64, 192, 192, 64])
+                            {
+                                self.custom_matrix = m;
+                                changed = true;
                             }
-                            EffectKind::Glitch(glitch) => {
-                                egui::ComboBox::from_id_salt(format!("glitch_mode_{}", node.id))
-                                    .selected_text(match glitch.mode {
-                                        JpegSubMode::BlockShift => "Block Shift",
-                                        JpegSubMode::ChannelSwap => "Channel Swap",
-                                        JpegSubMode::ScanLineOffset => "Scan Line Offset",
-                                        JpegSubMode::BlockScramble => "Block Scramble",
-                                        JpegSubMode::InterlaceCorruption => "Interlace Corruption",
-                                    })
-                                    .show_ui(ui, |ui| {
-                                        for (m, lbl) in [
-                                            (JpegSubMode::BlockShift, "Block Shift"),
-                                            (JpegSubMode::ChannelSwap, "Channel Swap"),
-                                            (JpegSubMode::ScanLineOffset, "Scan Line Offset"),
-                                            (JpegSubMode::BlockScramble, "Block Scramble"),
-                                            (JpegSubMode::InterlaceCorruption, "Interlace Corruption"),
-                                        ] {
-                                            if ui.selectable_value(&mut glitch.mode, m, lbl).clicked() {
-                                                changed = true;
-                                            }
-                                        }
-                                    });
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut glitch.intensity, 0.05..=1.0).text("Intensity"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
+                            if ui.button("Bayer 4x4").clicked() {
+                                let bayer = vec![0, 128, 32, 160, 192, 64, 224, 96, 48, 176, 16, 144, 240, 112, 208, 80];
+                                if let Ok(m) = CustomMatrixDither::new("Bayer 4x4 Variant", 4, 4, bayer) {
+                                    self.custom_matrix = m;
+                                    changed = true;
+                                }
                             }
-                            EffectKind::Crt(crt) => {
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut crt.scanline_intensity, 0.0..=1.0).text("Scanlines"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut crt.barrel_curvature, 0.0..=0.3).text("Barrel"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut crt.vignette_intensity, 0.0..=1.0).text("Vignette"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Import JSON...").clicked()
+                                && let Some(path) = rfd::FileDialog::new().add_filter("JSON Matrix", &["json"]).pick_file()
+                                && let Ok(json) = std::fs::read_to_string(&path)
+                                && let Ok(m) = CustomMatrixDither::from_json(&json)
+                            {
+                                self.status_text = format!("Imported matrix: {} ({}x{})", m.name, m.width, m.height);
+                                self.custom_matrix = m;
+                                changed = true;
                             }
-                            EffectKind::Blur(blur) => {
-                                check_slider(ui, egui::Slider::new(&mut blur.sigma, 0.2..=5.0).text("Sigma"), &mut changed, &mut preview_changed);
+                            if ui.button("Export JSON...").clicked() {
+                                let fname = format!("{}.json", self.custom_matrix.name.to_lowercase().replace(' ', "-"));
+                                if let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("JSON Matrix", &["json"]).save_file()
+                                    && let Ok(json) = self.custom_matrix.to_json()
+                                {
+                                    let _ = std::fs::write(&path, json);
+                                    self.status_text = format!("Exported matrix to {}", path.display());
+                                }
                             }
-                            EffectKind::Sharpen(sharpen) => {
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut sharpen.amount, 0.1..=3.0).text("Amount"),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
-                            }
-                            EffectKind::Lut3d(lut) => {
-                                ui.label(format!("3D LUT: '{}' ({}³)", lut.title, lut.size));
-                            }
-                        }
-                    });
-                }
+                        });
+                    }
 
-                if let Some(idx) = move_up {
-                    self.effect_stack.move_up(idx);
-                    changed = true;
-                }
-                if let Some(idx) = move_down {
-                    self.effect_stack.move_down(idx);
-                    changed = true;
-                }
-                if let Some(idx) = duplicate_node {
-                    self.effect_stack.duplicate(idx);
-                    changed = true;
-                }
-                if let Some(idx) = delete_node {
-                    self.effect_stack.remove(idx);
-                    changed = true;
-                }
+                    if self.selected_algo.to_lowercase().contains("morphogenesis") || self.selected_algo.to_lowercase().contains("reaction-diffusion")
+                    {
+                        ui.separator();
+                        ui.label("Reaction-Diffusion Morphogenesis:");
+                        ui.horizontal(|ui| {
+                            ui.label("Regime:");
+                            egui::ComboBox::from_id_salt("rd_morphology")
+                                .selected_text(match self.rd_morphology {
+                                    ReactionDiffusionMorphology::Labyrinth => "Labyrinth",
+                                    ReactionDiffusionMorphology::Spots => "Leopard Spots",
+                                    ReactionDiffusionMorphology::Solitons => "Soliton Wavelets",
+                                    ReactionDiffusionMorphology::PulsatingWaves => "Pulsating Waves",
+                                    ReactionDiffusionMorphology::Fingerprints => "Fingerprint Ridges",
+                                    ReactionDiffusionMorphology::Coral => "Branching Coral",
+                                    _ => "Labyrinth",
+                                })
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Labyrinth, "Labyrinth").clicked() {
+                                        changed = true;
+                                    }
+                                    if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Spots, "Leopard Spots").clicked() {
+                                        changed = true;
+                                    }
+                                    if ui
+                                        .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Solitons, "Soliton Wavelets")
+                                        .clicked()
+                                    {
+                                        changed = true;
+                                    }
+                                    if ui
+                                        .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::PulsatingWaves, "Pulsating Waves")
+                                        .clicked()
+                                    {
+                                        changed = true;
+                                    }
+                                    if ui
+                                        .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Fingerprints, "Fingerprint Ridges")
+                                        .clicked()
+                                    {
+                                        changed = true;
+                                    }
+                                    if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Coral, "Branching Coral").clicked() {
+                                        changed = true;
+                                    }
+                                });
+                        });
+                        check_slider(ui, egui::Slider::new(&mut self.rd_steps, 10..=200).text("PDE Steps"), &mut changed, &mut preview_changed);
+                    }
 
-                // Add Effect Layer Dropdown
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("add_effect_dropdown").selected_text("➕ Add Effect Layer...").show_ui(ui, |ui| {
-                        if ui.button("Epsilon Glow Bloom").clicked() {
-                            self.effect_stack.add(EffectNode::new(0, "Glow Bloom", EffectKind::Glow(EpsilonGlow::default())));
-                            changed = true;
-                        }
-                        if ui.button("Chromatic Aberration").clicked() {
-                            self.effect_stack.add(EffectNode::new(0, "Chromatic Aberration", EffectKind::Chromatic(ChromaticAberration::default())));
-                            changed = true;
-                        }
-                        if ui.button("JPEG Glitch Core").clicked() {
-                            self.effect_stack.add(EffectNode::new(0, "JPEG Glitch", EffectKind::Glitch(JpegGlitchCore::default())));
-                            changed = true;
-                        }
-                        if ui.button("Vintage CRT Simulation").clicked() {
-                            self.effect_stack.add(EffectNode::new(0, "Vintage CRT", EffectKind::Crt(VintageCrtSimulation::default())));
-                            changed = true;
-                        }
-                        if ui.button("Gaussian Blur").clicked() {
-                            self.effect_stack.add(EffectNode::new(0, "Gaussian Blur", EffectKind::Blur(GaussianBlur::default())));
-                            changed = true;
-                        }
-                        if ui.button("Sharpen (Unsharp Mask)").clicked() {
-                            self.effect_stack.add(EffectNode::new(0, "Sharpen", EffectKind::Sharpen(Sharpen::default())));
-                            changed = true;
-                        }
-                    });
+                    if self.selected_algo.to_lowercase().contains("flow field") || self.selected_algo.to_lowercase().contains("vector flow") {
+                        ui.separator();
+                        ui.label("Vector Flow Field Steered Controls:");
+                        check_slider(
+                            ui,
+                            egui::Slider::new(&mut self.flow_scale, 0.005..=0.20).text("Noise Scale"),
+                            &mut changed,
+                            &mut preview_changed,
+                        );
+                        check_slider(ui, egui::Slider::new(&mut self.flow_swirl, 0.0..=5.0).text("Vortex Swirl"), &mut changed, &mut preview_changed);
+                    }
                 });
-            });
 
-            // Temporal Noise & Animation
-            ui.group(|ui| {
-                ui.label("Temporal Noise & Animation:");
-                if ui.checkbox(&mut self.temporal_noise_enabled, "Live Noise Stream").changed() {
-                    changed = true;
-                }
-                if self.temporal_noise_enabled {
-                    egui::ComboBox::from_id_salt("temporal_pattern_picker")
-                        .selected_text(match self.temporal_pattern {
-                            TemporalNoisePattern::CrtScanBeamJitter => "CRT Scan Beam Jitter",
-                            TemporalNoisePattern::PhosphorGrainHum => "Phosphor Grain Hum",
-                            TemporalNoisePattern::InterlacedFieldShimmer => "Interlaced Field Shimmer",
-                            TemporalNoisePattern::LcdSubpixelGridDrift => "LCD Grid Drift",
-                            TemporalNoisePattern::VhsTapePhaseNoise => "VHS Phase Noise",
-                            TemporalNoisePattern::ThermalAnalogDrift => "Thermal Analog Drift",
-                            TemporalNoisePattern::StaticHashWhiteNoise => "Static Hash Noise",
-                            TemporalNoisePattern::BayerPhaseStepping => "Bayer Phase Stepping",
-                            TemporalNoisePattern::BlueNoiseTemporalJitter => "Blue Noise Jitter",
+                // Palette Controls & Color Science
+                ui.group(|ui| {
+                    ui.label("Target Palette & Metric:");
+                    let palettes =
+                        ["Monochrome", "Macintosh 1-bit", "Game Boy", "CGA Mode 1", "Cyberpunk", "Apple II", "Commodore 64", "NES", "PICO-8"];
+                    egui::ComboBox::from_id_salt("palette_picker").selected_text(&self.selected_palette_name).show_ui(ui, |ui| {
+                        for p in palettes {
+                            if ui.selectable_label(self.selected_palette_name == p, p).clicked() {
+                                self.selected_palette_name = p.into();
+                                let metric = self.active_palette.metric;
+                                self.active_palette = match p {
+                                    "Monochrome" => Palette::monochrome(),
+                                    "Macintosh 1-bit" => Palette::mac_1bit(),
+                                    "CGA Mode 1" => Palette::cga_mode_1(),
+                                    "Cyberpunk" => Palette::cyberpunk(),
+                                    "Apple II" => Palette::apple_ii(),
+                                    "Commodore 64" => Palette::commodore_64(),
+                                    "NES" => Palette::nes(),
+                                    "PICO-8" => Palette::pico_8(),
+                                    _ => Palette::game_boy(),
+                                };
+                                self.active_palette.metric = metric;
+                                changed = true;
+                            }
+                        }
+                    });
+
+                    // Color Metric Selection
+                    egui::ComboBox::from_id_salt("color_metric_picker")
+                        .selected_text(match self.active_palette.metric {
+                            ColorMetric::Redmean => "Redmean (Perceptual)",
+                            ColorMetric::EuclideanRgb => "Euclidean RGB",
+                            ColorMetric::CieLab => "CIELAB ΔE*",
+                            ColorMetric::Oklab => "OKLab (Perceptual)",
+                            ColorMetric::Ciede2000 => "CIEDE2000 ΔE00",
                         })
                         .show_ui(ui, |ui| {
-                            for (pat, label) in [
-                                (TemporalNoisePattern::CrtScanBeamJitter, "CRT Scan Beam Jitter"),
-                                (TemporalNoisePattern::PhosphorGrainHum, "Phosphor Grain Hum"),
-                                (TemporalNoisePattern::InterlacedFieldShimmer, "Interlaced Field Shimmer"),
-                                (TemporalNoisePattern::LcdSubpixelGridDrift, "LCD Grid Drift"),
-                                (TemporalNoisePattern::VhsTapePhaseNoise, "VHS Phase Noise"),
-                                (TemporalNoisePattern::ThermalAnalogDrift, "Thermal Analog Drift"),
-                                (TemporalNoisePattern::StaticHashWhiteNoise, "Static Hash Noise"),
-                                (TemporalNoisePattern::BayerPhaseStepping, "Bayer Phase Stepping"),
-                                (TemporalNoisePattern::BlueNoiseTemporalJitter, "Blue Noise Jitter"),
+                            for (metric, label) in [
+                                (ColorMetric::Oklab, "OKLab (Perceptual)"),
+                                (ColorMetric::Ciede2000, "CIEDE2000 ΔE00"),
+                                (ColorMetric::Redmean, "Redmean (Perceptual)"),
+                                (ColorMetric::EuclideanRgb, "Euclidean RGB"),
+                                (ColorMetric::CieLab, "CIELAB ΔE*"),
                             ] {
-                                if ui.selectable_value(&mut self.temporal_pattern, pat, label).clicked() {
+                                if ui.selectable_value(&mut self.active_palette.metric, metric, label).clicked() {
                                     changed = true;
                                 }
                             }
                         });
 
-                    check_slider(
-                        ui,
-                        egui::Slider::new(&mut self.temporal_intensity, 0.05..=1.0).text("Noise Intensity"),
-                        &mut changed,
-                        &mut preview_changed,
-                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Sort Lum").clicked() {
+                            self.active_palette.sort_by_luminance(true);
+                            changed = true;
+                        }
+                        if ui.button("Randomize").clicked() {
+                            self.active_palette.randomize_unlocked(Instant::now().elapsed().as_nanos() as u64);
+                            changed = true;
+                        }
+                        if ui.button("Prune Dead").on_hover_text("Prune unlocked swatches with <0.1% usage").clicked()
+                            && !self.swatch_percentages.is_empty()
+                            && self.active_palette.swatches.len() == self.swatch_percentages.len()
+                        {
+                            let mut pruned = Vec::new();
+                            for (i, swatch) in self.active_palette.swatches.iter().enumerate() {
+                                let pct = self.swatch_percentages.get(i).copied().unwrap_or(0.0);
+                                if swatch.locked || pct >= 0.1 {
+                                    pruned.push(*swatch);
+                                }
+                            }
+                            if !pruned.is_empty() && pruned.len() < self.active_palette.swatches.len() {
+                                self.active_palette.swatches = pruned;
+                                changed = true;
+                            }
+                        }
+                    });
+
+                    // Swatches list with live color pickers, locks, utilization, and add/remove buttons
+                    ui.label("Swatches & Live Palette Editing:");
+                    let mut lock_changed = false;
+                    let mut delete_idx = None;
+                    let num_swatches = self.active_palette.swatches.len();
+                    for (idx, swatch) in self.active_palette.swatches.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            let mut rgb = [swatch.color.r, swatch.color.g, swatch.color.b];
+                            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                swatch.color = RgbColor::new(rgb[0], rgb[1], rgb[2]);
+                                lock_changed = true;
+                            }
+                            if ui.checkbox(&mut swatch.locked, "Lock").changed() {
+                                lock_changed = true;
+                            }
+                            if let Some(&pct) = self.swatch_percentages.get(idx) {
+                                ui.label(format!("{pct:4.1}%"));
+                            }
+                            if num_swatches > 1 && ui.small_button("✕").on_hover_text("Remove swatch").clicked() {
+                                delete_idx = Some(idx);
+                            }
+                        });
+                    }
+                    if let Some(d) = delete_idx {
+                        self.active_palette.swatches.remove(d);
+                        changed = true;
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("+ Add Swatch").clicked() {
+                            self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
+                            changed = true;
+                        }
+                        if ui.button("🎨 Harmonies...").on_hover_text("Generate balanced OKLCH perceptual harmonies").clicked() {
+                            self.show_harmonies_dialog = true;
+                        }
+                        if ui.button("💾 Export...").clicked() {
+                            let fname = format!("{}.gpl", self.active_palette.name.to_lowercase().replace(' ', "-"));
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_file_name(&fname)
+                                .add_filter("GIMP Palette (.gpl)", &["gpl"])
+                                .add_filter("Color Table (.act)", &["act"])
+                                .add_filter("Hex Palette (.hex)", &["hex"])
+                                .add_filter("JASC-PAL (.pal)", &["pal"])
+                                .add_filter("JSON Palette (.json)", &["json"])
+                                .save_file()
+                                && let Ok(()) = self.active_palette.export_to_file(&path)
+                            {
+                                self.status_text = format!("Exported palette to {}", path.display());
+                            }
+                        }
+                    });
+                    if lock_changed {
+                        changed = true;
+                    }
+                });
+
+                // Tonal Cycling
+                ui.group(|ui| {
+                    ui.label("Tonal Cycling:");
+                    check_slider(ui, egui::Slider::new(&mut self.tonal_cycle_step, 0..=8).text("Cycle Step"), &mut changed, &mut preview_changed);
+                });
+
+                // Phase 8.2: Draggable & Reorderable Downstream Effects Stack
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Downstream Effects Stack (Layers):");
+                        if ui.button("🎲 Shuffle").on_hover_text("Randomize retro glitch, CRT, and bloom adjustments").clicked() {
+                            self.shuffle_adjustments();
+                            changed = true;
+                        }
+                        if ui.button("↺ Reset").on_hover_text("Reset stack to defaults").clicked() {
+                            self.effect_stack = EffectStack::default_stack();
+                            changed = true;
+                        }
+                    });
+
+                    let mut move_up = None;
+                    let mut move_down = None;
+                    let mut duplicate_node = None;
+                    let mut delete_node = None;
+                    let num_nodes = self.effect_stack.nodes.len();
+
+                    for (idx, node) in self.effect_stack.nodes.iter_mut().enumerate() {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                changed |= ui.checkbox(&mut node.enabled, "").changed();
+                                ui.strong(&node.name);
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("🗑").on_hover_text("Delete layer").clicked() {
+                                        delete_node = Some(idx);
+                                    }
+                                    if ui.small_button("📋").on_hover_text("Duplicate layer").clicked() {
+                                        duplicate_node = Some(idx);
+                                    }
+                                    if idx + 1 < num_nodes && ui.small_button("⬇").on_hover_text("Move down").clicked() {
+                                        move_down = Some(idx);
+                                    }
+                                    if idx > 0 && ui.small_button("⬆").on_hover_text("Move up").clicked() {
+                                        move_up = Some(idx);
+                                    }
+                                });
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Blend:");
+                                egui::ComboBox::from_id_salt(format!("blend_{}", node.id)).selected_text(node.blend_mode.name()).show_ui(ui, |ui| {
+                                    for mode in BlendMode::ALL {
+                                        if ui.selectable_value(&mut node.blend_mode, mode, mode.name()).clicked() {
+                                            changed = true;
+                                        }
+                                    }
+                                });
+                                ui.label("α:");
+                                check_slider(
+                                    ui,
+                                    egui::Slider::new(&mut node.opacity, 0.0..=1.0).show_value(true),
+                                    &mut changed,
+                                    &mut preview_changed,
+                                );
+                            });
+
+                            // Layer-specific parameter editors
+                            match &mut node.kind {
+                                EffectKind::Glow(glow) => {
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut glow.threshold, 50..=250).text("Threshold"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                    check_slider(ui, egui::Slider::new(&mut glow.radius, 1..=12).text("Radius"), &mut changed, &mut preview_changed);
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut glow.intensity, 0.1..=2.0).text("Intensity"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                }
+                                EffectKind::Chromatic(chroma) => {
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut chroma.shift_x, -15..=15).text("Shift X"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                    changed |= ui.checkbox(&mut chroma.radial, "Radial Shift").changed();
+                                }
+                                EffectKind::Glitch(glitch) => {
+                                    egui::ComboBox::from_id_salt(format!("glitch_mode_{}", node.id))
+                                        .selected_text(match glitch.mode {
+                                            JpegSubMode::BlockShift => "Block Shift",
+                                            JpegSubMode::ChannelSwap => "Channel Swap",
+                                            JpegSubMode::ScanLineOffset => "Scan Line Offset",
+                                            JpegSubMode::BlockScramble => "Block Scramble",
+                                            JpegSubMode::InterlaceCorruption => "Interlace Corruption",
+                                        })
+                                        .show_ui(ui, |ui| {
+                                            for (m, lbl) in [
+                                                (JpegSubMode::BlockShift, "Block Shift"),
+                                                (JpegSubMode::ChannelSwap, "Channel Swap"),
+                                                (JpegSubMode::ScanLineOffset, "Scan Line Offset"),
+                                                (JpegSubMode::BlockScramble, "Block Scramble"),
+                                                (JpegSubMode::InterlaceCorruption, "Interlace Corruption"),
+                                            ] {
+                                                if ui.selectable_value(&mut glitch.mode, m, lbl).clicked() {
+                                                    changed = true;
+                                                }
+                                            }
+                                        });
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut glitch.intensity, 0.05..=1.0).text("Intensity"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                }
+                                EffectKind::Crt(crt) => {
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut crt.scanline_intensity, 0.0..=1.0).text("Scanlines"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut crt.barrel_curvature, 0.0..=0.3).text("Barrel"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut crt.vignette_intensity, 0.0..=1.0).text("Vignette"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                }
+                                EffectKind::Blur(blur) => {
+                                    check_slider(ui, egui::Slider::new(&mut blur.sigma, 0.2..=5.0).text("Sigma"), &mut changed, &mut preview_changed);
+                                }
+                                EffectKind::Sharpen(sharpen) => {
+                                    check_slider(
+                                        ui,
+                                        egui::Slider::new(&mut sharpen.amount, 0.1..=3.0).text("Amount"),
+                                        &mut changed,
+                                        &mut preview_changed,
+                                    );
+                                }
+                                EffectKind::Lut3d(lut) => {
+                                    ui.label(format!("3D LUT: '{}' ({}³)", lut.title, lut.size));
+                                }
+                            }
+                        });
+                    }
+
+                    if let Some(idx) = move_up {
+                        self.effect_stack.move_up(idx);
+                        changed = true;
+                    }
+                    if let Some(idx) = move_down {
+                        self.effect_stack.move_down(idx);
+                        changed = true;
+                    }
+                    if let Some(idx) = duplicate_node {
+                        self.effect_stack.duplicate(idx);
+                        changed = true;
+                    }
+                    if let Some(idx) = delete_node {
+                        self.effect_stack.remove(idx);
+                        changed = true;
+                    }
+
+                    // Add Effect Layer Dropdown
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("add_effect_dropdown").selected_text("➕ Add Effect Layer...").show_ui(ui, |ui| {
+                            if ui.button("Epsilon Glow Bloom").clicked() {
+                                self.effect_stack.add(EffectNode::new(0, "Glow Bloom", EffectKind::Glow(EpsilonGlow::default())));
+                                changed = true;
+                            }
+                            if ui.button("Chromatic Aberration").clicked() {
+                                self.effect_stack.add(EffectNode::new(
+                                    0,
+                                    "Chromatic Aberration",
+                                    EffectKind::Chromatic(ChromaticAberration::default()),
+                                ));
+                                changed = true;
+                            }
+                            if ui.button("JPEG Glitch Core").clicked() {
+                                self.effect_stack.add(EffectNode::new(0, "JPEG Glitch", EffectKind::Glitch(JpegGlitchCore::default())));
+                                changed = true;
+                            }
+                            if ui.button("Vintage CRT Simulation").clicked() {
+                                self.effect_stack.add(EffectNode::new(0, "Vintage CRT", EffectKind::Crt(VintageCrtSimulation::default())));
+                                changed = true;
+                            }
+                            if ui.button("Gaussian Blur").clicked() {
+                                self.effect_stack.add(EffectNode::new(0, "Gaussian Blur", EffectKind::Blur(GaussianBlur::default())));
+                                changed = true;
+                            }
+                            if ui.button("Sharpen (Unsharp Mask)").clicked() {
+                                self.effect_stack.add(EffectNode::new(0, "Sharpen", EffectKind::Sharpen(Sharpen::default())));
+                                changed = true;
+                            }
+                        });
+                    });
+                });
+
+                // Temporal Noise & Animation
+                ui.group(|ui| {
+                    ui.label("Temporal Noise & Animation:");
+                    if ui.checkbox(&mut self.temporal_noise_enabled, "Live Noise Stream").changed() {
+                        changed = true;
+                    }
+                    if self.temporal_noise_enabled {
+                        egui::ComboBox::from_id_salt("temporal_pattern_picker")
+                            .selected_text(match self.temporal_pattern {
+                                TemporalNoisePattern::CrtScanBeamJitter => "CRT Scan Beam Jitter",
+                                TemporalNoisePattern::PhosphorGrainHum => "Phosphor Grain Hum",
+                                TemporalNoisePattern::InterlacedFieldShimmer => "Interlaced Field Shimmer",
+                                TemporalNoisePattern::LcdSubpixelGridDrift => "LCD Grid Drift",
+                                TemporalNoisePattern::VhsTapePhaseNoise => "VHS Phase Noise",
+                                TemporalNoisePattern::ThermalAnalogDrift => "Thermal Analog Drift",
+                                TemporalNoisePattern::StaticHashWhiteNoise => "Static Hash Noise",
+                                TemporalNoisePattern::BayerPhaseStepping => "Bayer Phase Stepping",
+                                TemporalNoisePattern::BlueNoiseTemporalJitter => "Blue Noise Jitter",
+                            })
+                            .show_ui(ui, |ui| {
+                                for (pat, label) in [
+                                    (TemporalNoisePattern::CrtScanBeamJitter, "CRT Scan Beam Jitter"),
+                                    (TemporalNoisePattern::PhosphorGrainHum, "Phosphor Grain Hum"),
+                                    (TemporalNoisePattern::InterlacedFieldShimmer, "Interlaced Field Shimmer"),
+                                    (TemporalNoisePattern::LcdSubpixelGridDrift, "LCD Grid Drift"),
+                                    (TemporalNoisePattern::VhsTapePhaseNoise, "VHS Phase Noise"),
+                                    (TemporalNoisePattern::ThermalAnalogDrift, "Thermal Analog Drift"),
+                                    (TemporalNoisePattern::StaticHashWhiteNoise, "Static Hash Noise"),
+                                    (TemporalNoisePattern::BayerPhaseStepping, "Bayer Phase Stepping"),
+                                    (TemporalNoisePattern::BlueNoiseTemporalJitter, "Blue Noise Jitter"),
+                                ] {
+                                    if ui.selectable_value(&mut self.temporal_pattern, pat, label).clicked() {
+                                        changed = true;
+                                    }
+                                }
+                            });
+
+                        check_slider(
+                            ui,
+                            egui::Slider::new(&mut self.temporal_intensity, 0.05..=1.0).text("Noise Intensity"),
+                            &mut changed,
+                            &mut preview_changed,
+                        );
+                    }
+                });
+
+                // Debounce and wheel settings
+                ui.checkbox(&mut self.debounce_mode, "Debounce Rendering");
+                ui.checkbox(&mut self.fine_wheel_increment, "Fine Wheel Increment");
+
+                if changed {
+                    self.record_undo_state();
+                    self.trigger_render();
+                } else if preview_changed {
+                    self.trigger_render_preview();
                 }
             });
-
-            // Debounce and wheel settings
-            ui.checkbox(&mut self.debounce_mode, "Debounce Rendering");
-            ui.checkbox(&mut self.fine_wheel_increment, "Fine Wheel Increment");
-
-            if changed {
-                self.record_undo_state();
-                self.trigger_render();
-            } else if preview_changed {
-                self.trigger_render_preview();
-            }
-        });
+        }
 
         // Center Viewport Interactive Canvas
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -5252,159 +5901,194 @@ impl eframe::App for DitherCraftApp {
                     available_rect.center(),
                     egui::Align2::CENTER_CENTER,
                     "No image loaded. Use File -> Open Image...",
-                    egui::FontId::proportional(16.0),
+                    egui::FontId::proportional(16.0_f32),
                     Color32::from_gray(140),
+                );
+            }
+
+            // Floating Toolbar in Zen Focus Mode
+            if self.workflow_mode == WorkflowLayoutMode::ZenFocus {
+                egui::Area::new(egui::Id::new("zen_floating_toolbar")).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0_f32, 16.0_f32)).show(
+                    ctx,
+                    |_ui| {
+                        egui::Frame::window(ctx.style().as_ref()).show(_ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.button("🗗 Exit Zen (F11)").on_hover_text("Return to standard Dither Studio layout").clicked() {
+                                    self.set_workflow_mode(WorkflowLayoutMode::DitherStudio);
+                                }
+                                ui.separator();
+                                for tool in WorkstationTool::ALL {
+                                    if ui.selectable_label(self.active_tool == tool, tool.label()).clicked() {
+                                        self.active_tool = tool;
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("🔍 Actions (Ctrl+K)").on_hover_text("Open Universal Command Palette").clicked() {
+                                    self.show_command_palette = true;
+                                    self.command_search_query.clear();
+                                    self.command_selected_index = 0;
+                                }
+                                if ui.button("📋 Copy (Ctrl+C)").clicked() {
+                                    self.copy_rendered_image_to_clipboard();
+                                }
+                            });
+                        });
+                    },
                 );
             }
         });
 
         // Timeline & Viewport Control Toolbar
-        egui::TopBottomPanel::bottom("timeline_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // Split View controls
-                let mut split_changed = false;
-                if ui.checkbox(&mut self.split_view_enabled, "Compare View").changed() {
-                    split_changed = true;
-                }
-                if self.split_view_enabled {
-                    egui::ComboBox::from_id_salt("split_view_mode_combo").selected_text(self.split_mode.label()).show_ui(ui, |ui| {
-                        for m in SplitViewMode::ALL {
-                            if ui.selectable_value(&mut self.split_mode, m, m.label()).clicked() {
-                                split_changed = true;
+        if self.workflow_mode != WorkflowLayoutMode::ZenFocus {
+            egui::TopBottomPanel::bottom("timeline_panel").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // Split View controls
+                    let mut split_changed = false;
+                    if ui.checkbox(&mut self.split_view_enabled, "Compare View").changed() {
+                        split_changed = true;
+                    }
+                    if self.split_view_enabled {
+                        egui::ComboBox::from_id_salt("split_view_mode_combo").selected_text(self.split_mode.label()).show_ui(ui, |ui| {
+                            for m in SplitViewMode::ALL {
+                                if ui.selectable_value(&mut self.split_mode, m, m.label()).clicked() {
+                                    split_changed = true;
+                                }
                             }
-                        }
-                    });
+                        });
 
-                    match self.split_mode {
-                        SplitViewMode::Vertical | SplitViewMode::Horizontal => {
-                            if ui.add(egui::Slider::new(&mut self.split_position, 0.0..=1.0).text("Position")).changed() {
-                                split_changed = true;
+                        match self.split_mode {
+                            SplitViewMode::Vertical | SplitViewMode::Horizontal => {
+                                if ui.add(egui::Slider::new(&mut self.split_position, 0.0..=1.0).text("Position")).changed() {
+                                    split_changed = true;
+                                }
                             }
-                        }
-                        SplitViewMode::Checkerboard => {
-                            if ui.add(egui::Slider::new(&mut self.split_checker_tile_size, 8..=128).text("Tile Size")).changed() {
-                                split_changed = true;
+                            SplitViewMode::Checkerboard => {
+                                if ui.add(egui::Slider::new(&mut self.split_checker_tile_size, 8..=128).text("Tile Size")).changed() {
+                                    split_changed = true;
+                                }
                             }
-                        }
-                        SplitViewMode::Difference => {
-                            ui.label("Heatmap: Black=0, Blue=Low, Red=High Δ");
+                            SplitViewMode::Difference => {
+                                ui.label("Heatmap: Black=0, Blue=Low, Red=High Δ");
+                            }
                         }
                     }
-                }
-                if split_changed {
-                    self.update_texture(ctx);
-                }
-
-                ui.separator();
-
-                // Timeline Transport controls
-                let play_label = if self.is_playing { "⏸ Pause" } else { "▶ Play" };
-                if ui.button(play_label).clicked() {
-                    self.is_playing = !self.is_playing;
-                    if self.is_playing {
-                        self.last_frame_instant = Instant::now();
+                    if split_changed {
+                        self.update_texture(ctx);
                     }
-                }
 
-                if ui.button("⏮").clicked() {
-                    let prev = self.timeline_frame.saturating_sub(1);
-                    self.set_current_frame(prev);
-                }
+                    ui.separator();
 
-                if ui.button("⏭").clicked() {
-                    let next = if self.timeline_frame + 1 < self.timeline_max_frames {
-                        self.timeline_frame + 1
-                    } else if self.loop_mode {
-                        0
-                    } else {
-                        self.timeline_frame
-                    };
-                    self.set_current_frame(next);
-                }
+                    // Timeline Transport controls
+                    let play_label = if self.is_playing { "⏸ Pause" } else { "▶ Play" };
+                    if ui.button(play_label).clicked() {
+                        self.is_playing = !self.is_playing;
+                        if self.is_playing {
+                            self.last_frame_instant = Instant::now();
+                        }
+                    }
 
-                let max_slider = self.timeline_max_frames.saturating_sub(1);
-                if ui.add(egui::Slider::new(&mut self.timeline_frame, 0..=max_slider).text("Frame")).changed() {
-                    self.set_current_frame(self.timeline_frame);
-                }
+                    if ui.button("⏮").clicked() {
+                        let prev = self.timeline_frame.saturating_sub(1);
+                        self.set_current_frame(prev);
+                    }
 
-                ui.add(egui::Slider::new(&mut self.target_fps, 1..=60).text("FPS"));
-                ui.checkbox(&mut self.loop_mode, "Loop");
+                    if ui.button("⏭").clicked() {
+                        let next = if self.timeline_frame + 1 < self.timeline_max_frames {
+                            self.timeline_frame + 1
+                        } else if self.loop_mode {
+                            0
+                        } else {
+                            self.timeline_frame
+                        };
+                        self.set_current_frame(next);
+                    }
 
-                let mut cadence_changed = false;
-                egui::ComboBox::from_label("Cadence")
-                    .selected_text(match self.cadence_mode {
-                        CadenceMode::Passthrough => "Passthrough",
-                        CadenceMode::Cinematic24 => "Cinematic 24 (3:2)",
-                        CadenceMode::AnimeOnTwos12 => "Anime 12 (On-Twos)",
-                        CadenceMode::RetroCrunch8 => "Retro 8 FPS",
-                        CadenceMode::StopMotion4 => "Stop-Motion 4 FPS",
-                        CadenceMode::InterlacedFields => "Interlaced Fields",
-                    })
-                    .show_ui(ui, |ui| {
-                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::Passthrough, "Passthrough").changed();
-                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::Cinematic24, "Cinematic 24 (3:2)").changed();
-                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::AnimeOnTwos12, "Anime 12 (On-Twos)").changed();
-                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::RetroCrunch8, "Retro 8 FPS").changed();
-                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::StopMotion4, "Stop-Motion 4 FPS").changed();
-                        cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::InterlacedFields, "Interlaced Fields").changed();
-                    });
+                    let max_slider = self.timeline_max_frames.saturating_sub(1);
+                    if ui.add(egui::Slider::new(&mut self.timeline_frame, 0..=max_slider).text("Frame")).changed() {
+                        self.set_current_frame(self.timeline_frame);
+                    }
 
-                let mut onion_changed = false;
-                onion_changed |= ui.checkbox(&mut self.onion_skin_enabled, "Onion Skin").changed();
-                if self.onion_skin_enabled {
-                    onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.opacity, 0.05..=0.9).text("Ghost α")).changed();
-                    onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.prev_frames, 1..=4).text("Prev")).changed();
-                    onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.next_frames, 0..=4).text("Next")).changed();
-                }
+                    ui.add(egui::Slider::new(&mut self.target_fps, 1..=60).text("FPS"));
+                    ui.checkbox(&mut self.loop_mode, "Loop");
 
-                if cadence_changed || onion_changed {
-                    self.set_current_frame(self.timeline_frame);
-                }
+                    let mut cadence_changed = false;
+                    egui::ComboBox::from_label("Cadence")
+                        .selected_text(match self.cadence_mode {
+                            CadenceMode::Passthrough => "Passthrough",
+                            CadenceMode::Cinematic24 => "Cinematic 24 (3:2)",
+                            CadenceMode::AnimeOnTwos12 => "Anime 12 (On-Twos)",
+                            CadenceMode::RetroCrunch8 => "Retro 8 FPS",
+                            CadenceMode::StopMotion4 => "Stop-Motion 4 FPS",
+                            CadenceMode::InterlacedFields => "Interlaced Fields",
+                        })
+                        .show_ui(ui, |ui| {
+                            cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::Passthrough, "Passthrough").changed();
+                            cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::Cinematic24, "Cinematic 24 (3:2)").changed();
+                            cadence_changed |=
+                                ui.selectable_value(&mut self.cadence_mode, CadenceMode::AnimeOnTwos12, "Anime 12 (On-Twos)").changed();
+                            cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::RetroCrunch8, "Retro 8 FPS").changed();
+                            cadence_changed |= ui.selectable_value(&mut self.cadence_mode, CadenceMode::StopMotion4, "Stop-Motion 4 FPS").changed();
+                            cadence_changed |=
+                                ui.selectable_value(&mut self.cadence_mode, CadenceMode::InterlacedFields, "Interlaced Fields").changed();
+                        });
 
-                ui.separator();
-                let mut tc_changed = false;
-                tc_changed |= ui
-                    .checkbox(&mut self.temporal_coherence_enabled, "Temporal Coherence")
-                    .on_hover_text("Suppress inter-frame high-frequency dither flicker")
-                    .changed();
-                if self.temporal_coherence_enabled {
-                    tc_changed |= ui.add(egui::Slider::new(&mut self.temporal_coherence_damping, 0.1..=0.95).text("Damping")).changed();
-                    tc_changed |= ui.add(egui::Slider::new(&mut self.temporal_coherence_threshold, 0.01..=0.20).text("Motion Thresh")).changed();
-                }
-                if tc_changed {
-                    self.trigger_render_preview();
-                }
+                    let mut onion_changed = false;
+                    onion_changed |= ui.checkbox(&mut self.onion_skin_enabled, "Onion Skin").changed();
+                    if self.onion_skin_enabled {
+                        onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.opacity, 0.05..=0.9).text("Ghost α")).changed();
+                        onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.prev_frames, 1..=4).text("Prev")).changed();
+                        onion_changed |= ui.add(egui::Slider::new(&mut self.onion_skin_config.next_frames, 0..=4).text("Next")).changed();
+                    }
 
-                ui.separator();
-                let audio_loaded = self.audio_track.is_some();
-                let wav_btn_text = if audio_loaded { "🎵 WAV Loaded" } else { "🎵 Load WAV..." };
-                if ui.button(wav_btn_text).clicked()
-                    && let Some(path) = rfd::FileDialog::new().add_filter("WAV Audio", &["wav"]).pick_file()
-                    && let Ok(bytes) = std::fs::read(&path)
-                    && let Ok(track) = AudioTrack::parse_wav(&bytes)
-                {
-                    let dur = if track.sample_rate > 0 && track.channels > 0 {
-                        (track.samples.len() as f64) / (track.sample_rate as f64 * track.channels as f64)
-                    } else {
-                        0.0
-                    };
-                    self.status_text = format!("Loaded WAV audio track: {} Hz, {} ch, {:.2}s", track.sample_rate, track.channels, dur);
-                    self.audio_track = Some(track);
-                    self.audio_reactive_enabled = true;
-                    self.trigger_render();
-                }
-                if audio_loaded {
-                    if ui.checkbox(&mut self.audio_reactive_enabled, "Reactive").changed() {
+                    if cadence_changed || onion_changed {
+                        self.set_current_frame(self.timeline_frame);
+                    }
+
+                    ui.separator();
+                    let mut tc_changed = false;
+                    tc_changed |= ui
+                        .checkbox(&mut self.temporal_coherence_enabled, "Temporal Coherence")
+                        .on_hover_text("Suppress inter-frame high-frequency dither flicker")
+                        .changed();
+                    if self.temporal_coherence_enabled {
+                        tc_changed |= ui.add(egui::Slider::new(&mut self.temporal_coherence_damping, 0.1..=0.95).text("Damping")).changed();
+                        tc_changed |= ui.add(egui::Slider::new(&mut self.temporal_coherence_threshold, 0.01..=0.20).text("Motion Thresh")).changed();
+                    }
+                    if tc_changed {
+                        self.trigger_render_preview();
+                    }
+
+                    ui.separator();
+                    let audio_loaded = self.audio_track.is_some();
+                    let wav_btn_text = if audio_loaded { "🎵 WAV Loaded" } else { "🎵 Load WAV..." };
+                    if ui.button(wav_btn_text).clicked()
+                        && let Some(path) = rfd::FileDialog::new().add_filter("WAV Audio", &["wav"]).pick_file()
+                        && let Ok(bytes) = std::fs::read(&path)
+                        && let Ok(track) = AudioTrack::parse_wav(&bytes)
+                    {
+                        let dur = if track.sample_rate > 0 && track.channels > 0 {
+                            (track.samples.len() as f64) / (track.sample_rate as f64 * track.channels as f64)
+                        } else {
+                            0.0
+                        };
+                        self.status_text = format!("Loaded WAV audio track: {} Hz, {} ch, {:.2}s", track.sample_rate, track.channels, dur);
+                        self.audio_track = Some(track);
+                        self.audio_reactive_enabled = true;
                         self.trigger_render();
                     }
-                    if self.audio_reactive_enabled {
-                        ui.colored_label(Color32::from_rgb(255, 100, 100), format!("Bass: {:.2}", self.audio_spectrum.bass));
-                        ui.colored_label(Color32::from_rgb(100, 255, 100), format!("Mid: {:.2}", self.audio_spectrum.mid));
-                        ui.colored_label(Color32::from_rgb(100, 200, 255), format!("Treble: {:.2}", self.audio_spectrum.treble));
+                    if audio_loaded {
+                        if ui.checkbox(&mut self.audio_reactive_enabled, "Reactive").changed() {
+                            self.trigger_render();
+                        }
+                        if self.audio_reactive_enabled {
+                            ui.colored_label(Color32::from_rgb(255, 100, 100), format!("Bass: {:.2}", self.audio_spectrum.bass));
+                            ui.colored_label(Color32::from_rgb(100, 255, 100), format!("Mid: {:.2}", self.audio_spectrum.mid));
+                            ui.colored_label(Color32::from_rgb(100, 200, 255), format!("Treble: {:.2}", self.audio_spectrum.treble));
+                        }
                     }
-                }
+                });
             });
-        });
+        }
 
         // Bottom Status Bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
@@ -5694,6 +6378,7 @@ mod tests {
             show_command_palette: false,
             command_search_query: String::new(),
             command_selected_index: 0,
+            workflow_mode: WorkflowLayoutMode::DitherStudio,
         };
 
         let catalog = app.build_command_catalog();
@@ -5760,5 +6445,374 @@ mod tests {
         let de_curve = de.tone_curve.unwrap();
         assert_eq!(de_curve.points.len(), 5);
         assert!((de_curve.points[2].x - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_project_bundle_save_and_load_roundtrip() {
+        let (tx, _rx) = channel();
+        let mut app = DitherCraftApp {
+            source_image: None,
+            rendered_image: None,
+            texture: None,
+            selected_algo: "Bayer 8x8".into(),
+            algo_search_query: String::new(),
+            selected_palette_name: "Game Boy Classic".into(),
+            active_palette: Palette::game_boy(),
+            tonal_cycle_step: 2,
+            glow_enabled: true,
+            glow_threshold: 160,
+            glow_radius: 5,
+            glow_intensity: 1.2,
+            chromatic_enabled: false,
+            chromatic_shift: 0,
+            chromatic_radial: false,
+            glitch_enabled: false,
+            glitch_mode: JpegSubMode::BlockShift,
+            glitch_intensity: 0.3,
+            crt_enabled: false,
+            crt_scanline: 0.0,
+            crt_barrel: 0.0,
+            crt_vignette: 0.0,
+            blur_enabled: false,
+            blur_sigma: 1.0,
+            sharpen_enabled: false,
+            sharpen_amount: 0.8,
+            temporal_noise_enabled: false,
+            temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
+            temporal_intensity: 0.5,
+            frame_counter: 0,
+            theme: StudioTheme::StudioDark,
+            debounce_mode: false,
+            status_text: "Ready".into(),
+            render_latency_ms: 0.0,
+            telemetry_dither_ms: 0.0,
+            telemetry_effects_ms: 0.0,
+            telemetry_histogram_ms: 0.0,
+            show_telemetry_hud: false,
+            split_view_enabled: false,
+            split_mode: SplitViewMode::Vertical,
+            split_position: 0.5,
+            split_checker_tile_size: 16,
+            is_playing: false,
+            target_fps: 24,
+            loop_mode: true,
+            timeline_frame: 0,
+            timeline_max_frames: 1,
+            last_frame_instant: Instant::now(),
+            source_frames: Vec::new(),
+            frame_delays: vec![100],
+            fine_wheel_increment: false,
+            logo_texture: None,
+            show_about: false,
+            canvas_pan: egui::Vec2::ZERO,
+            canvas_zoom: 1.0,
+            show_pixel_grid: true,
+            swatch_percentages: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            render_generation: Arc::new(AtomicU64::new(0)),
+            egui_ctx: egui::Context::default(),
+            tx,
+            rx: _rx,
+            is_rendering: false,
+            show_batch_studio: false,
+            batch_input_dir: String::new(),
+            batch_output_dir: String::new(),
+            batch_status_msg: "Ready".into(),
+            batch_progress: 0.0,
+            batch_is_running: false,
+            audio_track: None,
+            audio_spectrum: AudioSpectrum::default(),
+            audio_reactive_enabled: false,
+            source_path: None,
+            recent_files: Vec::new(),
+            snapshots: [None, None, None, None],
+            show_loupe: false,
+            show_shortcuts_dialog: false,
+            levels_black: 10,
+            levels_white: 245,
+            levels_gamma: 1.1,
+            cvd_mode: CvdMode::Normal,
+            aspect_guide: RetroAspectGuide::None,
+            show_preset_gallery: false,
+            show_harmonies_dialog: false,
+            harmony_base_rgb: [255, 90, 30],
+            harmony_mode: ColorHarmony::Triadic,
+            harmony_count: 6,
+            lut_enabled: false,
+            lut_preset_name: "Technicolor 2-Strip".into(),
+            custom_lut: None,
+            cmyk_dot_shape: HalftoneDotShape::EuclideanRound,
+            cmyk_dot_gain: 0.0,
+            tonal_shadow_algo: "Bayer 8x8".into(),
+            tonal_mid_algo: "Floyd-Steinberg".into(),
+            tonal_highlight_algo: "Atkinson".into(),
+            tonal_shadow_threshold: 85,
+            tonal_highlight_threshold: 170,
+            tonal_feather: 16,
+            custom_matrix: CustomMatrixDither::default(),
+            cadence_mode: CadenceMode::default(),
+            onion_skin_enabled: false,
+            onion_skin_config: OnionSkinConfig::default(),
+            rd_morphology: ReactionDiffusionMorphology::default(),
+            rd_steps: 60,
+            flow_scale: 0.04,
+            flow_swirl: 1.5,
+            crop_dialog_open: false,
+            crop_x: 0,
+            crop_y: 0,
+            crop_width: 256,
+            crop_height: 256,
+            temporal_coherence_enabled: false,
+            temporal_coherence_damping: 0.65,
+            temporal_coherence_threshold: 0.06,
+            last_rendered_source: None,
+            last_rendered_output: None,
+            effect_stack: EffectStack::default_stack(),
+            active_tool: WorkstationTool::BrushMask,
+            brush_radius: 24.0,
+            brush_falloff: 0.5,
+            mask: None,
+            mask_blend_enabled: true,
+            secondary_algo: "Atkinson".into(),
+            quick_mask_active: false,
+            selection: None,
+            selection_mode: SelectionMode::New,
+            wand_tolerance: 0.12,
+            lasso_points: Vec::new(),
+            drag_start_pixel: None,
+            drag_current_pixel: None,
+            marching_ants_phase: 0.0,
+            tone_curve: ToneCurve::s_curve(),
+            show_curves_dialog: false,
+            curves_dragged_point: None,
+            show_command_palette: false,
+            command_search_query: String::new(),
+            command_selected_index: 0,
+            workflow_mode: WorkflowLayoutMode::PrintPrepress,
+        };
+
+        // Create 16x16 test image buffer
+        let mut test_img = ImageBuffer::new(16, 16).expect("create test img");
+        for y in 0..16 {
+            for x in 0..16 {
+                test_img.set_pixel(x, y, RgbColor::new((x * 15) as u8, (y * 15) as u8, 128));
+            }
+        }
+        let arc_img = Arc::new(test_img.clone());
+        app.source_image = Some(arc_img.clone());
+        app.source_frames = vec![arc_img];
+
+        // Create 16x16 mask
+        let mut mask = MaskBuffer::new(16, 16).expect("create mask");
+        mask.paint_brush(8, 8, 4.0, 0.5, 1.0, false);
+        app.mask = Some(mask.clone());
+
+        // Save project bundle to temp file
+        let temp_path = std::env::temp_dir().join(format!("test_bundle_{}.dithercraft", std::process::id()));
+        let save_res = app.save_project_bundle(&temp_path);
+        assert!(save_res.is_ok(), "Save project bundle must succeed: {:?}", save_res);
+        assert!(temp_path.exists(), "Saved bundle file must exist on disk");
+
+        // Load into second app
+        let (tx2, _rx2) = channel();
+        let mut app2 = DitherCraftApp {
+            source_image: None,
+            rendered_image: None,
+            texture: None,
+            selected_algo: "Floyd-Steinberg".into(),
+            algo_search_query: String::new(),
+            selected_palette_name: "Monochrome".into(),
+            active_palette: Palette::monochrome(),
+            tonal_cycle_step: 0,
+            glow_enabled: false,
+            glow_threshold: 180,
+            glow_radius: 4,
+            glow_intensity: 0.8,
+            chromatic_enabled: false,
+            chromatic_shift: 0,
+            chromatic_radial: false,
+            glitch_enabled: false,
+            glitch_mode: JpegSubMode::BlockShift,
+            glitch_intensity: 0.4,
+            crt_enabled: false,
+            crt_scanline: 0.0,
+            crt_barrel: 0.0,
+            crt_vignette: 0.0,
+            blur_enabled: false,
+            blur_sigma: 1.0,
+            sharpen_enabled: false,
+            sharpen_amount: 0.8,
+            temporal_noise_enabled: false,
+            temporal_pattern: TemporalNoisePattern::CrtScanBeamJitter,
+            temporal_intensity: 0.5,
+            frame_counter: 0,
+            theme: StudioTheme::StudioDark,
+            debounce_mode: false,
+            status_text: "Ready".into(),
+            render_latency_ms: 0.0,
+            telemetry_dither_ms: 0.0,
+            telemetry_effects_ms: 0.0,
+            telemetry_histogram_ms: 0.0,
+            show_telemetry_hud: false,
+            split_view_enabled: false,
+            split_mode: SplitViewMode::Vertical,
+            split_position: 0.5,
+            split_checker_tile_size: 16,
+            is_playing: false,
+            target_fps: 24,
+            loop_mode: true,
+            timeline_frame: 0,
+            timeline_max_frames: 1,
+            last_frame_instant: Instant::now(),
+            source_frames: Vec::new(),
+            frame_delays: vec![100],
+            fine_wheel_increment: false,
+            logo_texture: None,
+            show_about: false,
+            canvas_pan: egui::Vec2::ZERO,
+            canvas_zoom: 1.0,
+            show_pixel_grid: true,
+            swatch_percentages: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            render_generation: Arc::new(AtomicU64::new(0)),
+            egui_ctx: egui::Context::default(),
+            tx: tx2,
+            rx: _rx2,
+            is_rendering: false,
+            show_batch_studio: false,
+            batch_input_dir: String::new(),
+            batch_output_dir: String::new(),
+            batch_status_msg: "Ready".into(),
+            batch_progress: 0.0,
+            batch_is_running: false,
+            audio_track: None,
+            audio_spectrum: AudioSpectrum::default(),
+            audio_reactive_enabled: false,
+            source_path: None,
+            recent_files: Vec::new(),
+            snapshots: [None, None, None, None],
+            show_loupe: false,
+            show_shortcuts_dialog: false,
+            levels_black: 0,
+            levels_white: 255,
+            levels_gamma: 1.0,
+            cvd_mode: CvdMode::Normal,
+            aspect_guide: RetroAspectGuide::None,
+            show_preset_gallery: false,
+            show_harmonies_dialog: false,
+            harmony_base_rgb: [255, 90, 30],
+            harmony_mode: ColorHarmony::Triadic,
+            harmony_count: 6,
+            lut_enabled: false,
+            lut_preset_name: "Technicolor 2-Strip".into(),
+            custom_lut: None,
+            cmyk_dot_shape: HalftoneDotShape::EuclideanRound,
+            cmyk_dot_gain: 0.0,
+            tonal_shadow_algo: "Bayer 8x8".into(),
+            tonal_mid_algo: "Floyd-Steinberg".into(),
+            tonal_highlight_algo: "Atkinson".into(),
+            tonal_shadow_threshold: 85,
+            tonal_highlight_threshold: 170,
+            tonal_feather: 16,
+            custom_matrix: CustomMatrixDither::default(),
+            cadence_mode: CadenceMode::default(),
+            onion_skin_enabled: false,
+            onion_skin_config: OnionSkinConfig::default(),
+            rd_morphology: ReactionDiffusionMorphology::default(),
+            rd_steps: 60,
+            flow_scale: 0.04,
+            flow_swirl: 1.5,
+            crop_dialog_open: false,
+            crop_x: 0,
+            crop_y: 0,
+            crop_width: 256,
+            crop_height: 256,
+            temporal_coherence_enabled: false,
+            temporal_coherence_damping: 0.65,
+            temporal_coherence_threshold: 0.06,
+            last_rendered_source: None,
+            last_rendered_output: None,
+            effect_stack: EffectStack::default_stack(),
+            active_tool: WorkstationTool::Pointer,
+            brush_radius: 24.0,
+            brush_falloff: 0.5,
+            mask: None,
+            mask_blend_enabled: false,
+            secondary_algo: "Bayer 4x4".into(),
+            quick_mask_active: false,
+            selection: None,
+            selection_mode: SelectionMode::New,
+            wand_tolerance: 0.12,
+            lasso_points: Vec::new(),
+            drag_start_pixel: None,
+            drag_current_pixel: None,
+            marching_ants_phase: 0.0,
+            tone_curve: ToneCurve::linear(),
+            show_curves_dialog: false,
+            curves_dragged_point: None,
+            show_command_palette: false,
+            command_search_query: String::new(),
+            command_selected_index: 0,
+            workflow_mode: WorkflowLayoutMode::DitherStudio,
+        };
+
+        let load_res = app2.load_project_bundle(&temp_path);
+        assert!(load_res.is_ok(), "Load project bundle must succeed: {:?}", load_res);
+
+        // Verify restoration
+        assert_eq!(app2.selected_algo, "Bayer 8x8");
+        assert_eq!(app2.selected_palette_name, "Game Boy Classic");
+        assert_eq!(app2.secondary_algo, "Atkinson");
+        assert!(app2.mask_blend_enabled);
+        assert_eq!(app2.levels_black, 10);
+        assert_eq!(app2.levels_white, 245);
+
+        // Verify source image restored losslessly
+        let restored_src = app2.source_image.expect("restored source image");
+        assert_eq!(restored_src.width, 16);
+        assert_eq!(restored_src.height, 16);
+        assert_eq!(restored_src.data, test_img.data);
+
+        // Verify mask restored
+        let restored_mask = app2.mask.expect("restored mask");
+        assert_eq!(restored_mask.width, 16);
+        assert_eq!(restored_mask.height, 16);
+        assert_eq!(restored_mask.data, mask.data);
+
+        // Verify tone curve restored
+        assert_eq!(app2.tone_curve.points.len(), app.tone_curve.points.len());
+
+        let _ = std::fs::remove_file(temp_path);
+    }
+
+    #[test]
+    fn test_clipboard_rgba_roundtrip() {
+        let mut img = ImageBuffer::new(4, 4).expect("create buffer");
+        for y in 0..4 {
+            for x in 0..4 {
+                img.set_pixel(x, y, RgbColor::new((x * 50) as u8, (y * 50) as u8, 200));
+            }
+        }
+
+        // Pack RGB to RGBA
+        let mut rgba = Vec::with_capacity((img.width as usize) * (img.height as usize) * 4);
+        for chunk in img.data.chunks_exact(3) {
+            rgba.push(chunk[0]);
+            rgba.push(chunk[1]);
+            rgba.push(chunk[2]);
+            rgba.push(255);
+        }
+        assert_eq!(rgba.len(), 16 * 4);
+
+        // Unpack RGBA back to RGB
+        let mut rgb = Vec::with_capacity((img.width as usize) * (img.height as usize) * 3);
+        for chunk in rgba.chunks_exact(4) {
+            rgb.push(chunk[0]);
+            rgb.push(chunk[1]);
+            rgb.push(chunk[2]);
+        }
+        assert_eq!(rgb, img.data);
     }
 }
