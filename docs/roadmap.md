@@ -56,7 +56,7 @@ Focus: Eliminate all potential panic paths, resource exhaustion risks, and GUI t
 
 ### 1.2 Memory Footprint & Large Image Handling
 - [x] **Bounded Image Cache**: Prevent Out-Of-Memory (OOM) failures when importing large animated GIFs by enforcing allocation ceilings (300 frame cap, 16 MP limit).
-- [ ] **Progressive Downsampled Preview**: Generate a fast $512\times 512$ thumbnail pass during active slider scrubbing ($< 2\text{ms}$ latency), switching to full-resolution rendering upon mouse release.
+- [x] **Progressive Downsampled Preview**: Generate a fast $512\times 512$ thumbnail pass during active slider scrubbing ($< 2\text{ms}$ latency), switching to full-resolution rendering upon mouse release.
 - [x] **Safe Codec Decoders**: Implement strict allocation limits (`max_alloc`) on `image` decoders to prevent zip-bomb or decompression bomb exploits on malformed headers.
 
 ### 1.3 Property Testing, Fuzzing & Diagnostic Logging
@@ -65,7 +65,7 @@ Focus: Eliminate all potential panic paths, resource exhaustion risks, and GUI t
   - Ultra-wide aspect ratios ($32768\times 1$).
   - Extreme dynamic ranges and single-color images (all `#000000`, all `#FFFFFF`).
   - Palettes with 1 color, duplicate colors, and extreme 256-color arrays.
-- [ ] **Deterministic Golden Testing**: Automated visual regression testing comparing output hashes against fixed golden reference images across Linux, macOS, and Windows.
+- [x] **Deterministic Golden Testing**: Automated visual regression testing comparing output hashes (FNV-1a 64-bit) against fixed golden reference values across Linux, macOS, and Windows.
 - [ ] **Structured Telemetry**: Replace raw console logging with structured `tracing` spans recording rendering latency per stage (color conversion $\to$ spatial indexing $\to$ kernel diffusion $\to$ post-effects).
 
 ---
@@ -152,8 +152,8 @@ Focus: Sub-millisecond real-time processing for 4K and 8K ultra-high-resolution 
 Focus: Dynamic multimedia creation, video container processing, and music-synchronized graphics.
 
 ### 6.1 Native Video Container Demuxing
-- [ ] **Pure-Rust Container Ingestion**: Integrate a pure-Rust MP4 and WebM demuxer (e.g. `mp4` / `webm` crates) to extract video frame sequences without requiring system FFmpeg installations.
-- [ ] **APNG & Animated WebP Exporters**: Output modern, high-efficiency animated formats with full 24-bit color depth alongside legacy GIF.
+- [x] **Pure-Rust Container Ingestion**: Implemented a pure-Rust ISO-BMFF MP4 demuxer (`Mp4Demuxer`) in `crates/dither-core/src/video.rs` parsing video tracks, nominal FPS, and sample tables without system FFmpeg dependencies.
+- [x] **APNG Exporter**: Output modern, high-efficiency animated formats with full 24-bit color depth alongside legacy GIF via `png` chunk assembly in Desktop UI and CLI.
 
 ### 6.2 Audio-Reactive DSP Dithering
 - [x] **Audio Spectrum Analyzer**: Ingest `.wav` audio tracks with pure-Rust RIFF WAV decoder, perform multi-band frequency analysis (bass, mid, treble, RMS) to drive:

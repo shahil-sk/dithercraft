@@ -110,4 +110,66 @@ impl ImageBuffer {
         }
         Ok(out)
     }
+
+    /// Downsample the image to fit within `max_w` and `max_h` while preserving aspect ratio.
+    ///
+    /// Uses box-area averaging for downsampling, eliminating aliasing artifacts.
+    /// If the image is already within bounds, returns a clone.
+    pub fn downsample(&self, max_w: u32, max_h: u32) -> Result<Self, DitherError> {
+        if max_w == 0 || max_h == 0 {
+            return Err(DitherError::ZeroDimension);
+        }
+        if self.width <= max_w && self.height <= max_h {
+            return Ok(self.clone());
+        }
+
+        let scale_x = max_w as f32 / self.width as f32;
+        let scale_y = max_h as f32 / self.height as f32;
+        let scale = scale_x.min(scale_y);
+
+        let target_w = ((self.width as f32 * scale).round() as u32).max(1);
+        let target_h = ((self.height as f32 * scale).round() as u32).max(1);
+
+        let mut out = Self::new(target_w, target_h)?;
+
+        let x_ratio = self.width as f64 / target_w as f64;
+        let y_ratio = self.height as f64 / target_h as f64;
+
+        for ty in 0..target_h {
+            let sy_start = (ty as f64 * y_ratio) as usize;
+            let sy_end = (((ty + 1) as f64 * y_ratio).ceil() as usize).min(self.height as usize).max(sy_start + 1);
+
+            for tx in 0..target_w {
+                let sx_start = (tx as f64 * x_ratio) as usize;
+                let sx_end = (((tx + 1) as f64 * x_ratio).ceil() as usize).min(self.width as usize).max(sx_start + 1);
+
+                let mut r_sum = 0u64;
+                let mut g_sum = 0u64;
+                let mut b_sum = 0u64;
+                let mut count = 0u64;
+
+                for sy in sy_start..sy_end {
+                    let row_idx = sy * (self.width as usize) * 3;
+                    for sx in sx_start..sx_end {
+                        let idx = row_idx + sx * 3;
+                        if idx + 2 < self.data.len() {
+                            r_sum += self.data[idx] as u64;
+                            g_sum += self.data[idx + 1] as u64;
+                            b_sum += self.data[idx + 2] as u64;
+                            count += 1;
+                        }
+                    }
+                }
+
+                if let Some(r_avg) = r_sum.checked_div(count)
+                    && let Some(g_avg) = g_sum.checked_div(count)
+                    && let Some(b_avg) = b_sum.checked_div(count)
+                {
+                    out.set_pixel(tx, ty, RgbColor::new(r_avg.min(255) as u8, g_avg.min(255) as u8, b_avg.min(255) as u8));
+                }
+            }
+        }
+
+        Ok(out)
+    }
 }

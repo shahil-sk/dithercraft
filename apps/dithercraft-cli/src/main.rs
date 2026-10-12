@@ -4,7 +4,8 @@ mod mcp;
 
 use clap::{Parser, Subcommand};
 use dither_core::{
-    ImageBuffer, algorithms::*, color::RgbColor, palette::Palette, renderers::*, temporal::TemporalNoisePattern, vector::BlackVectorIsolation,
+    ImageBuffer, Mp4Demuxer, algorithms::*, color::RgbColor, palette::Palette, renderers::*, temporal::TemporalNoisePattern,
+    vector::BlackVectorIsolation,
 };
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::{AnimationDecoder, Frame, ImageReader, RgbaImage};
@@ -46,6 +47,26 @@ enum Commands {
         noise: Option<String>,
         #[arg(long, default_value_t = 0.5)]
         noise_intensity: f32,
+    },
+    /// Process and export an animation as full 24-bit color APNG
+    Apng {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(short, long, default_value = "floyd-steinberg")]
+        algo: String,
+        #[arg(short, long, default_value = "gameboy")]
+        palette: String,
+        #[arg(long)]
+        noise: Option<String>,
+        #[arg(long, default_value_t = 0.5)]
+        noise_intensity: f32,
+    },
+    /// Inspect an MP4 container and list tracks, dimensions, codecs, and sample counts
+    Mp4Info {
+        #[arg(short, long)]
+        input: PathBuf,
     },
     /// Export darkest pixels as an isolated vector path SVG
     Svg {
@@ -230,6 +251,105 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (total_frames as f64) / elapsed.as_secs_f64().max(0.001),
                 output.display()
             );
+        }
+
+        Commands::Apng { input, output, algo, palette, noise, noise_intensity } => {
+            let start = Instant::now();
+            let pal = select_palette(&palette);
+            let algo_name = algo.clone();
+            let temporal_noise = noise.as_deref().and_then(select_temporal_pattern);
+
+            let file_in = std::fs::File::open(&input)?;
+            let decoder = GifDecoder::new(std::io::BufReader::new(file_in))?;
+            let raw_frames = decoder.into_frames().collect_frames()?;
+            let total_frames = raw_frames.len();
+            if total_frames == 0 {
+                return Err("Input animation contains no frames".into());
+            }
+
+            let mut frames_data = Vec::with_capacity(total_frames);
+            for frame in raw_frames {
+                let (w, h) = (frame.buffer().width(), frame.buffer().height());
+                let (num, denom) = frame.delay().numer_denom_ms();
+                let delay_ms = num.checked_div(denom).map(|d| d.max(10)).unwrap_or(100);
+                let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+                for px in frame.buffer().pixels() {
+                    rgb.push(px[0]);
+                    rgb.push(px[1]);
+                    rgb.push(px[2]);
+                }
+                let buf = ImageBuffer::from_raw(w, h, rgb)?;
+                frames_data.push((buf, delay_ms));
+            }
+
+            let first_w = frames_data[0].0.width;
+            let first_h = frames_data[0].0.height;
+
+            use rayon::prelude::*;
+            let processed_frames: Result<Vec<(ImageBuffer, u32)>, dither_core::DitherError> = frames_data
+                .into_par_iter()
+                .enumerate()
+                .map(|(idx, (buf, delay))| {
+                    let mut current_buf = buf;
+                    if let Some(ref pattern) = temporal_noise {
+                        current_buf = pattern.apply(&current_buf, idx as u32, noise_intensity)?;
+                    }
+                    let algorithm = select_algorithm(&algo_name);
+                    let dithered = algorithm.apply(&current_buf, &pal)?;
+                    Ok((dithered, delay))
+                })
+                .collect();
+            let processed = processed_frames?;
+
+            let out_file = std::fs::File::create(&output)?;
+            let mut writer_buf = std::io::BufWriter::new(out_file);
+            let mut encoder = png::Encoder::new(&mut writer_buf, first_w, first_h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_animated(total_frames as u32, 0)?;
+            let mut png_writer = encoder.write_header()?;
+
+            for (dithered_buf, delay_ms) in processed {
+                let mut rgba = Vec::with_capacity((dithered_buf.width * dithered_buf.height * 4) as usize);
+                for chunk in dithered_buf.data.chunks_exact(3) {
+                    rgba.push(chunk[0]);
+                    rgba.push(chunk[1]);
+                    rgba.push(chunk[2]);
+                    rgba.push(255);
+                }
+                png_writer.set_frame_delay(delay_ms as u16, 1000)?;
+                png_writer.write_image_data(&rgba)?;
+            }
+
+            let elapsed = start.elapsed();
+            println!(
+                "APNG complete: {} frames processed in {:.2}s ({:.1} fps) -> {}",
+                total_frames,
+                elapsed.as_secs_f64(),
+                (total_frames as f64) / elapsed.as_secs_f64().max(0.001),
+                output.display()
+            );
+        }
+
+        Commands::Mp4Info { input } => {
+            let bytes = std::fs::read(&input)?;
+            let demuxer = Mp4Demuxer::parse(&bytes)?;
+            println!("MP4 Container: {}", input.display());
+            println!("  Brand: {:?}", String::from_utf8_lossy(&demuxer.major_brand));
+            println!("  Timescale: {}, Duration: {}", demuxer.timescale, demuxer.duration);
+            println!("  Tracks: {}", demuxer.tracks.len());
+            for (i, track) in demuxer.tracks.iter().enumerate() {
+                println!(
+                    "    Track #{}: ID={}, {}x{}, Codec={}, Samples={}, FPS={:.2}",
+                    i + 1,
+                    track.track_id,
+                    track.width,
+                    track.height,
+                    track.codec.as_str(),
+                    track.samples.len(),
+                    track.nominal_fps()
+                );
+            }
         }
 
         Commands::Svg { input, output, threshold } => {

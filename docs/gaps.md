@@ -26,10 +26,11 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
     - `CRT_POSTPROCESS_WGSL`: Unified compute pass performing barrel curvature lens distortion, scanline sinusoidal modulation, chromatic aberration pixel displacement, and vignette shading.
   - Zero external GUI/graphics crate coupling maintained within `crates/dither-core`.
 
-### 2.2 Direct Video Codec Container Demuxing (MP4 / WebM)
-- **Current Status**: The multi-frame engine supports animated GIF files and frame sequences natively without external C libraries.
-- **Identified Gap**: Ingesting H.264/H.265 `.mp4` and VP9/AV1 `.webm` video files requires external extraction or transcoding into animated GIF / image frames.
-- **Next Frontier**: Integrate a zero-system-dependency pure-Rust demuxer/decoder (or optional feature-gated `ffmpeg-sys`) for streaming direct video tracks through the dither pipeline.
+### 2.2 Direct Video Codec Container Demuxing (Pure-Rust ISO-BMFF MP4 & APNG)
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented pure-Rust `Mp4Demuxer` in `dither_core::video` parsing ISO-BMFF boxes (`ftyp`, `moov`, `mvhd`, `trak`, `tkhd`, `mdia`, `stbl`, `stsd`, `stts`, `stsc`, `stsz`, `stco`, `co64`, `stss`) to extract video track metadata, nominal FPS, and sample offsets without system FFmpeg dependencies.
+  - Integrated direct MP4 video loading in the desktop UI and `mp4-info` inspection in the CLI.
+  - Implemented APNG (Animated Portable Network Graphics) full 24-bit color depth exporter across desktop GUI and CLI without external C libraries.
 
 ### 2.3 Advanced Perceptual Color Spaces (CIEDE2000 & OKLab)
 - **Current Status**: **RESOLVED** (`v0.9.0`).
@@ -68,6 +69,11 @@ DitherCraft has achieved complete clean-room parity with its reference design ac
 - **Current Status**: **RESOLVED** (`v0.9.0`).
   - Integrated interactive `color_edit_button_srgb` color pickers for every swatch in the palette drawer.
   - Added live dynamic swatch addition (`+ Add Swatch`), single-click swatch removal (`✕`), and instantaneous non-blocking canvas re-dithering.
+
+### 2.10 Progressive Downsampled Preview & Deterministic Golden Testing
+- **Current Status**: **RESOLVED** (`v0.9.0`).
+  - Implemented `ImageBuffer::downsample(max_w, max_h)` providing $< 2\text{ms}$ low-latency rendering during active slider interaction, automatically triggering high-resolution passes on release.
+  - Implemented FNV-1a 64-bit golden checksum regression test suite verifying bit-exact cross-platform determinism across algorithm pipelines.
 
 ---
 

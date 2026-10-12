@@ -4,6 +4,8 @@
 /corpus
 /log
 .DS_Store
+.agents
+/.agents
 
 # Code review graph
 .code-review-graph/

@@ -1,7 +1,7 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 use dither_core::{
-    ImageBuffer,
+    AudioSpectrum, AudioTrack, ImageBuffer, Mp4Demuxer,
     algorithms::*,
     color::RgbColor,
     effects::*,
@@ -388,6 +388,11 @@ pub struct DitherCraftApp {
     batch_status_msg: String,
     batch_progress: f32,
     batch_is_running: bool,
+
+    // Audio-Reactive DSP
+    audio_track: Option<AudioTrack>,
+    audio_spectrum: AudioSpectrum,
+    audio_reactive_enabled: bool,
 }
 
 impl DitherCraftApp {
@@ -501,6 +506,10 @@ impl DitherCraftApp {
             batch_status_msg: "Ready".into(),
             batch_progress: 0.0,
             batch_is_running: false,
+
+            audio_track: None,
+            audio_spectrum: AudioSpectrum::default(),
+            audio_reactive_enabled: false,
         }
     }
 
@@ -632,10 +641,43 @@ impl DitherCraftApp {
     }
 
     fn trigger_render(&mut self) {
-        let Some(source) = self.source_image.clone() else { return };
+        self.trigger_render_mode(false);
+    }
+
+    fn trigger_render_preview(&mut self) {
+        self.trigger_render_mode(true);
+    }
+
+    fn trigger_render_mode(&mut self, is_preview: bool) {
+        let Some(mut source) = self.source_image.clone() else { return };
+        if is_preview
+            && (source.width > 512 || source.height > 512)
+            && let Ok(down) = source.downsample(512, 512)
+        {
+            source = Arc::new(down);
+        }
         let tx = self.tx.clone();
         let algo_name = self.selected_algo.clone();
-        let palette = self.active_palette.cycle_tonal(self.tonal_cycle_step);
+
+        let mut tonal_step = self.tonal_cycle_step;
+        let mut crt_scanline = self.crt_scanline;
+        let mut glitch_intensity = self.glitch_intensity;
+        let mut chromatic_shift = self.chromatic_shift;
+
+        if self.audio_reactive_enabled
+            && let Some(ref track) = self.audio_track
+        {
+            let spec = track.get_frame_spectrum(self.timeline_frame, self.target_fps);
+            self.audio_spectrum = spec;
+            if spec.bass > 0.35 {
+                tonal_step = (tonal_step + (spec.bass * 4.0) as usize) % 9;
+            }
+            glitch_intensity = (glitch_intensity + spec.bass * 0.4).min(1.0);
+            crt_scanline = (crt_scanline + spec.mid * 0.3).min(1.0);
+            chromatic_shift += (spec.treble * 8.0) as i32;
+        }
+
+        let palette = self.active_palette.cycle_tonal(tonal_step);
 
         let glow_opt = if self.glow_enabled {
             Some(EpsilonGlow { threshold: self.glow_threshold, radius: self.glow_radius, intensity: self.glow_intensity })
@@ -644,23 +686,19 @@ impl DitherCraftApp {
         };
 
         let chromatic_opt = if self.chromatic_enabled {
-            Some(ChromaticAberration { shift_x: self.chromatic_shift, shift_y: 0, radial: self.chromatic_radial })
+            Some(ChromaticAberration { shift_x: chromatic_shift, shift_y: 0, radial: self.chromatic_radial })
         } else {
             None
         };
 
         let glitch_opt = if self.glitch_enabled {
-            Some(JpegGlitchCore { mode: self.glitch_mode, intensity: self.glitch_intensity, block_size: 8, seed: 42 })
+            Some(JpegGlitchCore { mode: self.glitch_mode, intensity: glitch_intensity, block_size: 8, seed: 42 })
         } else {
             None
         };
 
         let crt_opt = if self.crt_enabled {
-            Some(VintageCrtSimulation {
-                scanline_intensity: self.crt_scanline,
-                barrel_curvature: self.crt_barrel,
-                vignette_intensity: self.crt_vignette,
-            })
+            Some(VintageCrtSimulation { scanline_intensity: crt_scanline, barrel_curvature: self.crt_barrel, vignette_intensity: self.crt_vignette })
         } else {
             None
         };
@@ -824,6 +862,16 @@ impl DitherCraftApp {
     }
 }
 
+#[inline]
+fn check_slider(ui: &mut egui::Ui, s: egui::Slider, changed: &mut bool, preview: &mut bool) {
+    let r = ui.add(s);
+    if r.dragged() {
+        *preview = true;
+    } else if r.drag_stopped() || r.changed() {
+        *changed = true;
+    }
+}
+
 impl eframe::App for DitherCraftApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Poll worker thread results
@@ -858,11 +906,56 @@ impl eframe::App for DitherCraftApp {
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open Image or GIF...").clicked() {
-                        let path = rfd::FileDialog::new().add_filter("Image / GIF", &["png", "jpg", "jpeg", "webp", "bmp", "gif"]).pick_file();
+                    if ui.button("Open Image, GIF, or Video...").clicked() {
+                        let path =
+                            rfd::FileDialog::new().add_filter("Media Files", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "m4v"]).pick_file();
                         if let Some(path) = path {
-                            let is_gif = path.extension().and_then(|e| e.to_str()).map(|s| s.eq_ignore_ascii_case("gif")).unwrap_or(false);
-                            if is_gif
+                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                            let is_gif = ext.eq_ignore_ascii_case("gif");
+                            let is_mp4 = ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("m4v");
+
+                            if is_mp4 && let Ok(bytes) = std::fs::read(&path) {
+                                if let Ok(demuxer) = Mp4Demuxer::parse(&bytes)
+                                    && let Some(track) = demuxer.primary_video_track()
+                                {
+                                    let mut frames = Vec::new();
+                                    for sample in &track.samples {
+                                        if let Some(s_bytes) = demuxer.get_sample_bytes(sample, &bytes)
+                                            && let Ok(dyn_img) = image::load_from_memory(s_bytes)
+                                        {
+                                            let rgb = dyn_img.to_rgb8();
+                                            let (w, h) = rgb.dimensions();
+                                            if let Ok(buf) = ImageBuffer::from_raw(w, h, rgb.into_raw()) {
+                                                frames.push(Arc::new(buf));
+                                                if frames.len() >= 300 {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if !frames.is_empty() {
+                                        self.timeline_max_frames = frames.len() as u32;
+                                        self.timeline_frame = 0;
+                                        self.source_image = Some(frames[0].clone());
+                                        self.source_frames = frames;
+                                        let delay = (1000.0 / track.nominal_fps().max(1.0)) as u32;
+                                        self.frame_delays = vec![delay; self.timeline_max_frames as usize];
+                                        self.canvas_pan = egui::Vec2::ZERO;
+                                        self.canvas_zoom = 1.0;
+                                        self.status_text =
+                                            format!("Loaded MP4 video ({} frames, {:.1} FPS)", self.source_frames.len(), track.nominal_fps());
+                                        self.trigger_render();
+                                    } else {
+                                        self.status_text = format!(
+                                            "Parsed MP4 track: {}x{}, codec: {}, {} samples",
+                                            track.width,
+                                            track.height,
+                                            track.codec.as_str(),
+                                            track.samples.len()
+                                        );
+                                    }
+                                }
+                            } else if is_gif
                                 && let Ok(file) = std::fs::File::open(&path)
                                 && let Ok(decoder) = GifDecoder::new(std::io::BufReader::new(file))
                                 && let Ok(mut raw_frames) = decoder.into_frames().collect_frames()
@@ -920,6 +1013,24 @@ impl eframe::App for DitherCraftApp {
                                     self.trigger_render();
                                 }
                             }
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Import Audio Track (.wav)...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("WAV Audio", &["wav"]).pick_file()
+                            && let Ok(bytes) = std::fs::read(&path)
+                            && let Ok(track) = AudioTrack::parse_wav(&bytes)
+                        {
+                            let dur = if track.sample_rate > 0 && track.channels > 0 {
+                                (track.samples.len() as f64) / (track.sample_rate as f64 * track.channels as f64)
+                            } else {
+                                0.0
+                            };
+                            self.status_text = format!("Loaded WAV audio track: {} Hz, {} ch, {:.2}s", track.sample_rate, track.channels, dur);
+                            self.audio_track = Some(track);
+                            self.audio_reactive_enabled = true;
+                            self.trigger_render();
                         }
                         ui.close_menu();
                     }
@@ -1034,6 +1145,115 @@ impl eframe::App for DitherCraftApp {
                                     }
                                 }
                                 self.status_text = format!("Exported animated GIF ({num_frames} frames)");
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Export Animated APNG...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("APNG Animation", &["png", "apng"]).save_file() {
+                            let num_frames = if self.source_frames.len() > 1 { self.source_frames.len() } else { self.timeline_max_frames as usize };
+                            let frames_to_render: Vec<Arc<ImageBuffer>> = if self.source_frames.len() > 1 {
+                                self.source_frames.clone()
+                            } else if let Some(ref src) = self.source_image {
+                                vec![src.clone(); num_frames]
+                            } else {
+                                Vec::new()
+                            };
+
+                            if !frames_to_render.is_empty()
+                                && let Ok(out_file) = std::fs::File::create(&path)
+                            {
+                                let first_frame = &frames_to_render[0];
+                                let mut writer_buf = std::io::BufWriter::new(out_file);
+                                let mut encoder = png::Encoder::new(&mut writer_buf, first_frame.width, first_frame.height);
+                                encoder.set_color(png::ColorType::Rgba);
+                                encoder.set_depth(png::BitDepth::Eight);
+                                let _ = encoder.set_animated(num_frames as u32, 0);
+                                let delays = self.frame_delays.clone();
+                                let default_delay_ms = 1000 / self.target_fps.max(1);
+                                let _ = encoder.set_frame_delay(default_delay_ms as u16, 1000);
+
+                                let algo_name = self.selected_algo.clone();
+                                let palette = self.active_palette.clone();
+                                let temporal_noise =
+                                    if self.temporal_noise_enabled { Some((self.temporal_pattern, self.temporal_intensity)) } else { None };
+                                let glow_opt = if self.glow_enabled {
+                                    Some(EpsilonGlow { threshold: self.glow_threshold, radius: self.glow_radius, intensity: self.glow_intensity })
+                                } else {
+                                    None
+                                };
+                                let crt_opt = if self.crt_enabled {
+                                    Some(VintageCrtSimulation {
+                                        scanline_intensity: self.crt_scanline,
+                                        barrel_curvature: self.crt_barrel,
+                                        vignette_intensity: self.crt_vignette,
+                                    })
+                                } else {
+                                    None
+                                };
+                                let blur_opt = if self.blur_enabled { Some(GaussianBlur::new(self.blur_sigma)) } else { None };
+                                let sharpen_opt = if self.sharpen_enabled { Some(Sharpen::new(self.sharpen_amount, 1.0)) } else { None };
+                                let chromatic_opt = if self.chromatic_enabled {
+                                    Some(ChromaticAberration { shift_x: self.chromatic_shift, shift_y: 0, radial: self.chromatic_radial })
+                                } else {
+                                    None
+                                };
+                                let glitch_opt = if self.glitch_enabled {
+                                    Some(JpegGlitchCore { mode: self.glitch_mode, intensity: self.glitch_intensity, block_size: 8, seed: 42 })
+                                } else {
+                                    None
+                                };
+
+                                use rayon::prelude::*;
+                                let rendered: Vec<_> = frames_to_render
+                                    .par_iter()
+                                    .enumerate()
+                                    .map(|(frame_idx, src_buf)| {
+                                        let mut current = (**src_buf).clone();
+                                        if let Some((pattern, intensity)) = temporal_noise {
+                                            current = pattern.apply(&current, frame_idx as u32, intensity).unwrap_or(current);
+                                        }
+                                        let algo = create_algorithm(&algo_name).unwrap_or_else(|| Box::new(FloydSteinberg::default()));
+                                        let mut out = algo.apply(&current, &palette).unwrap_or(current);
+                                        if let Some(glow) = &glow_opt {
+                                            out = glow.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(chroma) = &chromatic_opt {
+                                            out = chroma.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(blur) = &blur_opt {
+                                            out = blur.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(sharp) = &sharpen_opt {
+                                            out = sharp.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(crt) = &crt_opt {
+                                            out = crt.apply(&out).unwrap_or(out);
+                                        }
+                                        if let Some(glitch) = &glitch_opt {
+                                            out = glitch.apply(&out).unwrap_or(out);
+                                        }
+
+                                        let delay_ms = delays.get(frame_idx).copied().unwrap_or(default_delay_ms);
+                                        (out, delay_ms)
+                                    })
+                                    .collect();
+
+                                if let Ok(mut png_writer) = encoder.write_header() {
+                                    for (buf, delay_ms) in rendered {
+                                        let mut rgba_raw = Vec::with_capacity((buf.width * buf.height * 4) as usize);
+                                        for chunk in buf.data.chunks_exact(3) {
+                                            rgba_raw.push(chunk[0]);
+                                            rgba_raw.push(chunk[1]);
+                                            rgba_raw.push(chunk[2]);
+                                            rgba_raw.push(255);
+                                        }
+                                        let _ = png_writer.set_frame_delay(delay_ms as u16, 1000);
+                                        let _ = png_writer.write_image_data(&rgba_raw);
+                                    }
+                                    self.status_text = format!("Exported animated APNG ({num_frames} frames)");
+                                }
                             }
                         }
                         ui.close_menu();
@@ -1331,6 +1551,7 @@ impl eframe::App for DitherCraftApp {
             ui.separator();
 
             let mut changed = false;
+            let mut preview_changed = false;
 
             // Algorithm Search & Picker
             ui.group(|ui| {
@@ -1470,9 +1691,7 @@ impl eframe::App for DitherCraftApp {
             // Tonal Cycling
             ui.group(|ui| {
                 ui.label("Tonal Cycling:");
-                if ui.add(egui::Slider::new(&mut self.tonal_cycle_step, 0..=8).text("Cycle Step")).changed() {
-                    changed = true;
-                }
+                check_slider(ui, egui::Slider::new(&mut self.tonal_cycle_step, 0..=8).text("Cycle Step"), &mut changed, &mut preview_changed);
             });
 
             // Stackable Downstream Effects
@@ -1482,21 +1701,15 @@ impl eframe::App for DitherCraftApp {
                     changed = true;
                 }
                 if self.glow_enabled {
-                    if ui.add(egui::Slider::new(&mut self.glow_threshold, 50..=250).text("Threshold")).changed() {
-                        changed = true;
-                    }
-                    if ui.add(egui::Slider::new(&mut self.glow_radius, 1..=12).text("Radius")).changed() {
-                        changed = true;
-                    }
+                    check_slider(ui, egui::Slider::new(&mut self.glow_threshold, 50..=250).text("Threshold"), &mut changed, &mut preview_changed);
+                    check_slider(ui, egui::Slider::new(&mut self.glow_radius, 1..=12).text("Radius"), &mut changed, &mut preview_changed);
                 }
 
                 if ui.checkbox(&mut self.chromatic_enabled, "Chromatic Aberration").changed() {
                     changed = true;
                 }
                 if self.chromatic_enabled {
-                    if ui.add(egui::Slider::new(&mut self.chromatic_shift, -15..=15).text("Shift X")).changed() {
-                        changed = true;
-                    }
+                    check_slider(ui, egui::Slider::new(&mut self.chromatic_shift, -15..=15).text("Shift X"), &mut changed, &mut preview_changed);
                     if ui.checkbox(&mut self.chromatic_radial, "Radial Shift").changed() {
                         changed = true;
                     }
@@ -1527,38 +1740,35 @@ impl eframe::App for DitherCraftApp {
                                 }
                             }
                         });
-                    if ui.add(egui::Slider::new(&mut self.glitch_intensity, 0.05..=1.0).text("Glitch Intensity")).changed() {
-                        changed = true;
-                    }
+                    check_slider(
+                        ui,
+                        egui::Slider::new(&mut self.glitch_intensity, 0.05..=1.0).text("Glitch Intensity"),
+                        &mut changed,
+                        &mut preview_changed,
+                    );
                 }
 
                 if ui.checkbox(&mut self.crt_enabled, "Vintage CRT Simulation").changed() {
                     changed = true;
                 }
                 if self.crt_enabled {
-                    if ui.add(egui::Slider::new(&mut self.crt_scanline, 0.0..=1.0).text("Scanlines")).changed() {
-                        changed = true;
-                    }
-                    if ui.add(egui::Slider::new(&mut self.crt_barrel, 0.0..=0.3).text("Barrel")).changed() {
-                        changed = true;
-                    }
-                    if ui.add(egui::Slider::new(&mut self.crt_vignette, 0.0..=1.0).text("Vignette")).changed() {
-                        changed = true;
-                    }
+                    check_slider(ui, egui::Slider::new(&mut self.crt_scanline, 0.0..=1.0).text("Scanlines"), &mut changed, &mut preview_changed);
+                    check_slider(ui, egui::Slider::new(&mut self.crt_barrel, 0.0..=0.3).text("Barrel"), &mut changed, &mut preview_changed);
+                    check_slider(ui, egui::Slider::new(&mut self.crt_vignette, 0.0..=1.0).text("Vignette"), &mut changed, &mut preview_changed);
                 }
 
                 if ui.checkbox(&mut self.blur_enabled, "Gaussian Blur").changed() {
                     changed = true;
                 }
-                if self.blur_enabled && ui.add(egui::Slider::new(&mut self.blur_sigma, 0.2..=5.0).text("Sigma")).changed() {
-                    changed = true;
+                if self.blur_enabled {
+                    check_slider(ui, egui::Slider::new(&mut self.blur_sigma, 0.2..=5.0).text("Sigma"), &mut changed, &mut preview_changed);
                 }
 
                 if ui.checkbox(&mut self.sharpen_enabled, "Sharpen").changed() {
                     changed = true;
                 }
-                if self.sharpen_enabled && ui.add(egui::Slider::new(&mut self.sharpen_amount, 0.1..=3.0).text("Amount")).changed() {
-                    changed = true;
+                if self.sharpen_enabled {
+                    check_slider(ui, egui::Slider::new(&mut self.sharpen_amount, 0.1..=3.0).text("Amount"), &mut changed, &mut preview_changed);
                 }
             });
 
@@ -1599,9 +1809,12 @@ impl eframe::App for DitherCraftApp {
                             }
                         });
 
-                    if ui.add(egui::Slider::new(&mut self.temporal_intensity, 0.05..=1.0).text("Noise Intensity")).changed() {
-                        changed = true;
-                    }
+                    check_slider(
+                        ui,
+                        egui::Slider::new(&mut self.temporal_intensity, 0.05..=1.0).text("Noise Intensity"),
+                        &mut changed,
+                        &mut preview_changed,
+                    );
                 }
             });
 
@@ -1612,6 +1825,8 @@ impl eframe::App for DitherCraftApp {
             if changed {
                 self.record_undo_state();
                 self.trigger_render();
+            } else if preview_changed {
+                self.trigger_render_preview();
             }
         });
 
@@ -1807,6 +2022,35 @@ impl eframe::App for DitherCraftApp {
 
                 ui.add(egui::Slider::new(&mut self.target_fps, 1..=60).text("FPS"));
                 ui.checkbox(&mut self.loop_mode, "Loop");
+
+                ui.separator();
+                let audio_loaded = self.audio_track.is_some();
+                let wav_btn_text = if audio_loaded { "🎵 WAV Loaded" } else { "🎵 Load WAV..." };
+                if ui.button(wav_btn_text).clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("WAV Audio", &["wav"]).pick_file()
+                    && let Ok(bytes) = std::fs::read(&path)
+                    && let Ok(track) = AudioTrack::parse_wav(&bytes)
+                {
+                    let dur = if track.sample_rate > 0 && track.channels > 0 {
+                        (track.samples.len() as f64) / (track.sample_rate as f64 * track.channels as f64)
+                    } else {
+                        0.0
+                    };
+                    self.status_text = format!("Loaded WAV audio track: {} Hz, {} ch, {:.2}s", track.sample_rate, track.channels, dur);
+                    self.audio_track = Some(track);
+                    self.audio_reactive_enabled = true;
+                    self.trigger_render();
+                }
+                if audio_loaded {
+                    if ui.checkbox(&mut self.audio_reactive_enabled, "Reactive").changed() {
+                        self.trigger_render();
+                    }
+                    if self.audio_reactive_enabled {
+                        ui.colored_label(Color32::from_rgb(255, 100, 100), format!("Bass: {:.2}", self.audio_spectrum.bass));
+                        ui.colored_label(Color32::from_rgb(100, 255, 100), format!("Mid: {:.2}", self.audio_spectrum.mid));
+                        ui.colored_label(Color32::from_rgb(100, 200, 255), format!("Treble: {:.2}", self.audio_spectrum.treble));
+                    }
+                }
             });
         });
 

@@ -28,6 +28,37 @@ fn test_image_buffer_creation_and_pixel_access() {
 }
 
 #[test]
+fn test_image_buffer_downsampling() {
+    let mut buf = ImageBuffer::new(100, 100).expect("create buffer");
+    for y in 0..100 {
+        for x in 0..100 {
+            buf.set_pixel(x, y, RgbColor::new(200, 100, 50));
+        }
+    }
+
+    // Downsample to 20x20
+    let down = buf.downsample(20, 20).expect("downsample");
+    assert_eq!(down.width, 20);
+    assert_eq!(down.height, 20);
+    let px = down.get_pixel(10, 10).expect("pixel");
+    assert_eq!(px.r, 200);
+    assert_eq!(px.g, 100);
+    assert_eq!(px.b, 50);
+
+    // Aspect ratio preservation: 100x50 -> max(20, 20) => 20x10
+    let mut buf_rect = ImageBuffer::new(100, 50).expect("rect buffer");
+    buf_rect.set_pixel(0, 0, RgbColor::WHITE);
+    let down_rect = buf_rect.downsample(20, 20).expect("downsample rect");
+    assert_eq!(down_rect.width, 20);
+    assert_eq!(down_rect.height, 10);
+
+    // If already smaller, preserves exact buffer
+    let smaller = down_rect.downsample(50, 50).expect("noop");
+    assert_eq!(smaller.width, 20);
+    assert_eq!(smaller.height, 10);
+}
+
+#[test]
 fn test_rgb_color_luminance_and_distance() {
     let black = RgbColor::BLACK;
     let white = RgbColor::WHITE;
