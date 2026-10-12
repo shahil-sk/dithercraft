@@ -454,6 +454,48 @@ impl WorkflowLayoutMode {
     }
 }
 
+/// Active tab in the Left Studio Panel (Tools & Ingestion).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LeftPanelTab {
+    #[default]
+    ToolsMasking,
+    PaletteStudio,
+    LevelsCurves,
+}
+
+impl LeftPanelTab {
+    pub const ALL: [Self; 3] = [Self::ToolsMasking, Self::PaletteStudio, Self::LevelsCurves];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::ToolsMasking => "🛠 Tools & Masking",
+            Self::PaletteStudio => "🎨 Palette Studio",
+            Self::LevelsCurves => "📈 Levels & Curves",
+        }
+    }
+}
+
+/// Active tab in the Right Studio Panel (DSP & Effects).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RightPanelTab {
+    #[default]
+    Algorithm,
+    EffectsStack,
+    CrtNoise,
+}
+
+impl RightPanelTab {
+    pub const ALL: [Self; 3] = [Self::Algorithm, Self::EffectsStack, Self::CrtNoise];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Algorithm => "⚡ Algorithm",
+            Self::EffectsStack => "🥞 Layers & FX",
+            Self::CrtNoise => "📺 CRT & Noise",
+        }
+    }
+}
+
 /// Project bundle manifest serialized inside `.dithercraft` ZIP archives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectManifest {
@@ -549,6 +591,10 @@ pub enum CommandActionKind {
     AddCenterGuides,
     ClearGuides,
     BrowsePresetsVisually,
+    ToggleLeftSidebar,
+    ToggleRightSidebar,
+    SelectLeftTab(LeftPanelTab),
+    SelectRightTab(RightPanelTab),
 }
 
 /// Result of asynchronous background media decoding.
@@ -785,8 +831,12 @@ pub struct DitherCraftApp {
     command_search_query: String,
     command_selected_index: usize,
 
-    // Phase 14.1: Workflow Layout Modes
+    // Phase 14.1: Workflow Layout Modes & Modular Docking Panels
     pub workflow_mode: WorkflowLayoutMode,
+    pub show_left_sidebar: bool,
+    pub show_right_sidebar: bool,
+    pub left_panel_tab: LeftPanelTab,
+    pub right_panel_tab: RightPanelTab,
 
     // Phase 17.4: File Watcher & External Editor Auto-Reload Daemon
     pub auto_reload_enabled: bool,
@@ -1027,8 +1077,12 @@ impl DitherCraftApp {
             command_search_query: String::new(),
             command_selected_index: 0,
 
-            // Phase 14.1: Workflow Layout Modes
+            // Phase 14.1: Workflow Layout Modes & Modular Docking Panels
             workflow_mode: WorkflowLayoutMode::DitherStudio,
+            show_left_sidebar: true,
+            show_right_sidebar: true,
+            left_panel_tab: LeftPanelTab::ToolsMasking,
+            right_panel_tab: RightPanelTab::Algorithm,
 
             // Phase 17.4: File Watcher & Auto-Reload
             auto_reload_enabled: false,
@@ -1696,6 +1750,56 @@ impl DitherCraftApp {
             kind: CommandActionKind::BrowsePresetsVisually,
         });
 
+        // 15. Modular Workstation Docking Panels & Tabs
+        items.push(CommandItem {
+            title: "View: Toggle Left Tools Sidebar".into(),
+            category: "View",
+            shortcut: Some("Ctrl+["),
+            kind: CommandActionKind::ToggleLeftSidebar,
+        });
+        items.push(CommandItem {
+            title: "View: Toggle Right DSP Sidebar".into(),
+            category: "View",
+            shortcut: Some("Ctrl+]"),
+            kind: CommandActionKind::ToggleRightSidebar,
+        });
+        items.push(CommandItem {
+            title: "View Tab: Tools & Masking".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::SelectLeftTab(LeftPanelTab::ToolsMasking),
+        });
+        items.push(CommandItem {
+            title: "View Tab: Palette Studio".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::SelectLeftTab(LeftPanelTab::PaletteStudio),
+        });
+        items.push(CommandItem {
+            title: "View Tab: Levels & Curves".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::SelectLeftTab(LeftPanelTab::LevelsCurves),
+        });
+        items.push(CommandItem {
+            title: "View Tab: Dithering Algorithm".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::SelectRightTab(RightPanelTab::Algorithm),
+        });
+        items.push(CommandItem {
+            title: "View Tab: Layers & Effects Stack".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::SelectRightTab(RightPanelTab::EffectsStack),
+        });
+        items.push(CommandItem {
+            title: "View Tab: CRT & Temporal Noise".into(),
+            category: "View",
+            shortcut: None,
+            kind: CommandActionKind::SelectRightTab(RightPanelTab::CrtNoise),
+        });
+
         items
     }
 
@@ -1983,6 +2087,24 @@ impl DitherCraftApp {
             }
             CommandActionKind::BrowsePresetsVisually => {
                 self.show_preset_browser_modal = true;
+            }
+            CommandActionKind::ToggleLeftSidebar => {
+                self.show_left_sidebar = !self.show_left_sidebar;
+                self.status_text = format!("Left Tools Sidebar: {}", if self.show_left_sidebar { "ON" } else { "OFF" });
+            }
+            CommandActionKind::ToggleRightSidebar => {
+                self.show_right_sidebar = !self.show_right_sidebar;
+                self.status_text = format!("Right DSP Sidebar: {}", if self.show_right_sidebar { "ON" } else { "OFF" });
+            }
+            CommandActionKind::SelectLeftTab(tab) => {
+                self.show_left_sidebar = true;
+                self.left_panel_tab = tab;
+                self.status_text = format!("Switched to {}", tab.label());
+            }
+            CommandActionKind::SelectRightTab(tab) => {
+                self.show_right_sidebar = true;
+                self.right_panel_tab = tab;
+                self.status_text = format!("Switched to {}", tab.label());
             }
         }
 
@@ -2670,22 +2792,36 @@ impl DitherCraftApp {
         self.workflow_mode = mode;
         match mode {
             WorkflowLayoutMode::DitherStudio => {
+                self.show_left_sidebar = true;
+                self.show_right_sidebar = true;
                 self.status_text = "Switched to Dither Studio layout".into();
             }
             WorkflowLayoutMode::ZenFocus => {
+                self.show_left_sidebar = false;
+                self.show_right_sidebar = false;
                 self.status_text = "Zen Focus Mode: sidebars collapsed (F11 to toggle)".into();
             }
             WorkflowLayoutMode::PrintPrepress => {
+                self.show_left_sidebar = true;
+                self.show_right_sidebar = true;
+                self.left_panel_tab = LeftPanelTab::PaletteStudio;
+                self.right_panel_tab = RightPanelTab::Algorithm;
                 self.status_text = "Print & Prepress: CMYK Halftone Screen active".into();
                 self.selected_algo = "CMYK Halftone Screen (Rosette)".into();
                 self.trigger_render();
             }
             WorkflowLayoutMode::CrtArcade => {
+                self.show_left_sidebar = true;
+                self.show_right_sidebar = true;
+                self.right_panel_tab = RightPanelTab::CrtNoise;
                 self.status_text = "CRT & Retro Arcade: vintage scanline & curvature simulation active".into();
                 self.crt_enabled = true;
                 self.trigger_render();
             }
             WorkflowLayoutMode::MaskWorkshop => {
+                self.show_left_sidebar = true;
+                self.show_right_sidebar = true;
+                self.left_panel_tab = LeftPanelTab::ToolsMasking;
                 self.status_text = "Mask & Vector Workshop: brush masking & dual algorithm blending active".into();
                 self.active_tool = WorkstationTool::BrushMask;
                 self.mask_blend_enabled = true;
@@ -3190,6 +3326,790 @@ impl DitherCraftApp {
             }
         }
     }
+
+    fn render_tools_masking_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, changed: &mut bool) {
+        ui.label(egui::RichText::new("Workstation Tools:").strong());
+        ui.horizontal_wrapped(|ui| {
+            for tool in WorkstationTool::ALL {
+                if ui.selectable_label(self.active_tool == tool, tool.label()).clicked() {
+                    self.active_tool = tool;
+                }
+            }
+        });
+
+        match self.active_tool {
+            WorkstationTool::BrushMask | WorkstationTool::EraserMask => {
+                ui.horizontal(|ui| {
+                    ui.label("Radius:");
+                    ui.add(egui::Slider::new(&mut self.brush_radius, 1.0..=128.0).text("px"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Falloff:");
+                    ui.add(egui::Slider::new(&mut self.brush_falloff, 0.0..=1.0).text("Hardness"));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Clear Mask").clicked() {
+                        if let Some(m) = self.mask.as_mut() {
+                            m.clear();
+                        }
+                        if self.mask_blend_enabled {
+                            *changed = true;
+                        } else {
+                            self.update_texture(ctx);
+                        }
+                    }
+                    if ui.button("Invert Mask (Ctrl+Shift+I)").clicked() {
+                        if let Some(m) = self.mask.as_mut() {
+                            m.invert();
+                        }
+                        if self.mask_blend_enabled {
+                            *changed = true;
+                        } else {
+                            self.update_texture(ctx);
+                        }
+                    }
+                });
+            }
+            WorkstationTool::RectMarquee | WorkstationTool::EllipseMarquee | WorkstationTool::Lasso | WorkstationTool::MagicWand => {
+                ui.horizontal(|ui| {
+                    ui.label("Mode:");
+                    egui::ComboBox::from_id_salt("selection_mode_combo")
+                        .selected_text(match self.selection_mode {
+                            SelectionMode::New => "New",
+                            SelectionMode::Add => "Add (+)",
+                            SelectionMode::Subtract => "Subtract (-)",
+                            SelectionMode::Intersect => "Intersect (∩)",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.selection_mode, SelectionMode::New, "New");
+                            ui.selectable_value(&mut self.selection_mode, SelectionMode::Add, "Add (+)");
+                            ui.selectable_value(&mut self.selection_mode, SelectionMode::Subtract, "Subtract (-)");
+                            ui.selectable_value(&mut self.selection_mode, SelectionMode::Intersect, "Intersect (∩)");
+                        });
+                });
+                if self.active_tool == WorkstationTool::MagicWand {
+                    ui.horizontal(|ui| {
+                        ui.label("Wand Tolerance:");
+                        ui.add(egui::Slider::new(&mut self.wand_tolerance, 0.01..=0.50).text("OKLab ΔE"));
+                    });
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Select All").clicked() {
+                        self.select_all();
+                    }
+                    if ui.button("Deselect").clicked() {
+                        self.deselect();
+                    }
+                    if ui.button("Invert").clicked() {
+                        self.invert_selection();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Selection ➔ Mask").on_hover_text("Bake active marquee selection into mask").clicked() {
+                        self.convert_selection_to_mask();
+                        if self.mask_blend_enabled {
+                            *changed = true;
+                        } else {
+                            self.update_texture(ctx);
+                        }
+                    }
+                    if ui.button("Mask ➔ Selection").on_hover_text("Extract marquee selection from mask threshold").clicked() {
+                        self.convert_mask_to_selection();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Modify Radius:");
+                    ui.add(egui::Slider::new(&mut self.selection_modify_radius, 1..=32).text("px"));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Feather").on_hover_text("Feather selection edges").clicked() {
+                        self.feather_selection(self.selection_modify_radius);
+                    }
+                    if ui.button("Expand (+)").on_hover_text("Expand selection by N pixels").clicked() {
+                        self.expand_selection(self.selection_modify_radius);
+                    }
+                    if ui.button("Contract (-)").on_hover_text("Contract selection by N pixels").clicked() {
+                        self.contract_selection(self.selection_modify_radius);
+                    }
+                });
+                if let Some(sel) = self.selection.as_ref()
+                    && let Some((bx, by, bw, bh)) = sel.bounding_box()
+                {
+                    ui.label(format!("Bounds: ({bx}, {by}) {bw}x{bh} px"));
+                }
+            }
+            WorkstationTool::Pointer => {
+                ui.label("Drag canvas to pan, scroll to zoom.");
+                if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
+                    self.update_texture(ctx);
+                }
+            }
+        }
+
+        // Dual-Algorithm Spatial Blending
+        ui.separator();
+        if ui.checkbox(&mut self.mask_blend_enabled, "Dual-Algorithm Mask Blending").changed() {
+            *changed = true;
+        }
+        if self.mask_blend_enabled {
+            ui.horizontal(|ui| {
+                ui.label("Secondary:");
+                egui::ComboBox::from_id_salt("secondary_algo_picker").width(180.0).selected_text(&self.secondary_algo).show_ui(ui, |ui| {
+                    for info in dither_core::algorithms::ALL_ALGORITHMS.iter() {
+                        if ui.selectable_value(&mut self.secondary_algo, info.name.to_string(), info.name).clicked() {
+                            *changed = true;
+                        }
+                    }
+                });
+            });
+            ui.label(egui::RichText::new("Primary algo applies to Mask > 0; Secondary applies to Mask = 0.").italics().size(10.5));
+        }
+
+        ui.separator();
+        ui.collapsing("Parametric Range Masks (Luminance & Proximity)", |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Shadows (0-85)").clicked() {
+                    self.mask_lum_min = 0.0;
+                    self.mask_lum_max = 85.0;
+                    self.apply_mask_luminance_range(0.0, 85.0, 16.0);
+                    if self.mask_blend_enabled {
+                        *changed = true;
+                    } else {
+                        self.update_texture(ctx);
+                    }
+                }
+                if ui.button("Midtones (64-192)").clicked() {
+                    self.mask_lum_min = 64.0;
+                    self.mask_lum_max = 192.0;
+                    self.apply_mask_luminance_range(64.0, 192.0, 16.0);
+                    if self.mask_blend_enabled {
+                        *changed = true;
+                    } else {
+                        self.update_texture(ctx);
+                    }
+                }
+                if ui.button("Highlights (170-255)").clicked() {
+                    self.mask_lum_min = 170.0;
+                    self.mask_lum_max = 255.0;
+                    self.apply_mask_luminance_range(170.0, 255.0, 16.0);
+                    if self.mask_blend_enabled {
+                        *changed = true;
+                    } else {
+                        self.update_texture(ctx);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Min Lum:");
+                ui.add(egui::Slider::new(&mut self.mask_lum_min, 0.0..=255.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Max Lum:");
+                ui.add(egui::Slider::new(&mut self.mask_lum_max, 0.0..=255.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Feather:");
+                ui.add(egui::Slider::new(&mut self.mask_lum_feather, 0.0..=64.0));
+            });
+            if ui.button("Extract Luminance Mask").clicked() {
+                self.apply_mask_luminance_range(self.mask_lum_min, self.mask_lum_max, self.mask_lum_feather);
+                if self.mask_blend_enabled {
+                    *changed = true;
+                } else {
+                    self.update_texture(ctx);
+                }
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Proximity Color:");
+                ui.color_edit_button_srgb(&mut self.mask_sample_color);
+                ui.add(egui::Slider::new(&mut self.mask_color_tolerance, 0.01..=0.50).text("Tol"));
+            });
+            if ui.button("Extract Color Proximity Mask").clicked() {
+                let col = RgbColor::new(self.mask_sample_color[0], self.mask_sample_color[1], self.mask_sample_color[2]);
+                self.apply_mask_color_proximity(col, self.mask_color_tolerance);
+                if self.mask_blend_enabled {
+                    *changed = true;
+                } else {
+                    self.update_texture(ctx);
+                }
+            }
+        });
+    }
+
+    fn render_palette_studio_ui(&mut self, ui: &mut egui::Ui, changed: &mut bool) {
+        ui.label(egui::RichText::new("Target Palette & Color Metric:").strong());
+        let palettes = ["Monochrome", "Macintosh 1-bit", "Game Boy", "CGA Mode 1", "Cyberpunk", "Apple II", "Commodore 64", "NES", "PICO-8"];
+        egui::ComboBox::from_id_salt("palette_picker").selected_text(&self.selected_palette_name).show_ui(ui, |ui| {
+            for p in palettes {
+                if ui.selectable_label(self.selected_palette_name == p, p).clicked() {
+                    self.selected_palette_name = p.into();
+                    let metric = self.active_palette.metric;
+                    self.active_palette = Palette::from_name(p);
+                    self.active_palette.metric = metric;
+                    *changed = true;
+                }
+            }
+        });
+
+        // Color Metric Selection
+        egui::ComboBox::from_id_salt("color_metric_picker")
+            .selected_text(match self.active_palette.metric {
+                ColorMetric::Redmean => "Redmean (Perceptual)",
+                ColorMetric::EuclideanRgb => "Euclidean RGB",
+                ColorMetric::CieLab => "CIELAB ΔE*",
+                ColorMetric::Oklab => "OKLab (Perceptual)",
+                ColorMetric::Ciede2000 => "CIEDE2000 ΔE00",
+            })
+            .show_ui(ui, |ui| {
+                for (metric, label) in [
+                    (ColorMetric::Oklab, "OKLab (Perceptual)"),
+                    (ColorMetric::Ciede2000, "CIEDE2000 ΔE00"),
+                    (ColorMetric::Redmean, "Redmean (Perceptual)"),
+                    (ColorMetric::EuclideanRgb, "Euclidean RGB"),
+                    (ColorMetric::CieLab, "CIELAB ΔE*"),
+                ] {
+                    if ui.selectable_value(&mut self.active_palette.metric, metric, label).clicked() {
+                        *changed = true;
+                    }
+                }
+            });
+
+        ui.horizontal(|ui| {
+            if ui.button("Sort Lum").clicked() {
+                self.active_palette.sort_by_luminance(true);
+                *changed = true;
+            }
+            if ui.button("Randomize").clicked() {
+                self.active_palette.randomize_unlocked(Instant::now().elapsed().as_nanos() as u64);
+                *changed = true;
+            }
+            if ui.button("Prune Dead").on_hover_text("Prune unlocked swatches with <0.1% usage").clicked()
+                && !self.swatch_percentages.is_empty()
+                && self.active_palette.swatches.len() == self.swatch_percentages.len()
+            {
+                let mut pruned = Vec::new();
+                for (i, swatch) in self.active_palette.swatches.iter().enumerate() {
+                    let pct = self.swatch_percentages.get(i).copied().unwrap_or(0.0);
+                    if swatch.locked || pct >= 0.1 {
+                        pruned.push(*swatch);
+                    }
+                }
+                if !pruned.is_empty() && pruned.len() < self.active_palette.swatches.len() {
+                    self.active_palette.swatches = pruned;
+                    *changed = true;
+                }
+            }
+        });
+
+        ui.separator();
+        ui.label(format!("Swatches ({} colors):", self.active_palette.swatches.len()));
+        let mut lock_changed = false;
+        let mut delete_idx = None;
+        let num_swatches = self.active_palette.swatches.len();
+        for (idx, swatch) in self.active_palette.swatches.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let mut rgb = [swatch.color.r, swatch.color.g, swatch.color.b];
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    swatch.color = RgbColor::new(rgb[0], rgb[1], rgb[2]);
+                    lock_changed = true;
+                }
+                if ui.checkbox(&mut swatch.locked, "Lock").changed() {
+                    lock_changed = true;
+                }
+                if let Some(&pct) = self.swatch_percentages.get(idx) {
+                    ui.label(format!("{pct:4.1}%"));
+                }
+                if num_swatches > 1 && ui.small_button("✕").on_hover_text("Remove swatch").clicked() {
+                    delete_idx = Some(idx);
+                }
+            });
+        }
+        if let Some(d) = delete_idx {
+            self.active_palette.swatches.remove(d);
+            *changed = true;
+        }
+        if lock_changed {
+            *changed = true;
+        }
+
+        ui.horizontal(|ui| {
+            if ui.button("+ Add Swatch").clicked() {
+                self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
+                *changed = true;
+            }
+            if ui.button("🎨 Harmonies...").on_hover_text("Generate balanced OKLCH perceptual harmonies").clicked() {
+                self.show_harmonies_dialog = true;
+            }
+            if ui.button("💾 Export...").clicked() {
+                let fname = format!("{}.gpl", self.active_palette.name.to_lowercase().replace(' ', "-"));
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name(&fname)
+                    .add_filter("GIMP Palette (.gpl)", &["gpl"])
+                    .add_filter("Color Table (.act)", &["act"])
+                    .add_filter("Hex Palette (.hex)", &["hex"])
+                    .add_filter("JASC-PAL (.pal)", &["pal"])
+                    .add_filter("JSON Palette (.json)", &["json"])
+                    .save_file()
+                    && let Ok(()) = self.active_palette.export_to_file(&path)
+                {
+                    self.status_text = format!("Exported palette to {}", path.display());
+                }
+            }
+        });
+    }
+
+    fn render_levels_curves_ui(&mut self, ui: &mut egui::Ui, changed: &mut bool, preview_changed: &mut bool) {
+        ui.label(egui::RichText::new("Input Levels & Gamma:").strong());
+        ui.horizontal(|ui| {
+            if ui.button("↺ Reset Levels").on_hover_text("Reset Tone Levels (Black 0, White 255, Gamma 1.0)").clicked() {
+                self.levels_black = 0;
+                self.levels_white = 255;
+                self.levels_gamma = 1.0;
+                *changed = true;
+            }
+        });
+        check_slider(ui, egui::Slider::new(&mut self.levels_black, 0..=254).text("Black Point"), changed, preview_changed);
+        if self.levels_black >= self.levels_white {
+            self.levels_white = self.levels_black + 1;
+        }
+        check_slider(ui, egui::Slider::new(&mut self.levels_white, 1..=255).text("White Point"), changed, preview_changed);
+        if self.levels_white <= self.levels_black {
+            self.levels_black = self.levels_white.saturating_sub(1);
+        }
+        check_slider(ui, egui::Slider::new(&mut self.levels_gamma, 0.1..=3.0).text("Midtone Gamma").logarithmic(true), changed, preview_changed);
+
+        ui.separator();
+        ui.label(egui::RichText::new("Parametric Tone Curves:").strong());
+        ui.horizontal(|ui| {
+            if ui.button("📈 Open Curves Workshop...").on_hover_text("Open interactive monotonic Hermite tone curves workshop").clicked() {
+                self.show_curves_dialog = true;
+            }
+            if !self.tone_curve.is_identity() && ui.button("↺ Reset Curve").on_hover_text("Reset tone curve to identity linear").clicked() {
+                self.tone_curve.reset_linear();
+                *changed = true;
+            }
+        });
+        ui.label(format!("Active Curve: {} control points", self.tone_curve.points.len()));
+    }
+
+    fn render_algorithm_ui(&mut self, ui: &mut egui::Ui, changed: &mut bool, preview_changed: &mut bool) {
+        ui.label(egui::RichText::new("Dithering Algorithm:").strong());
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            ui.text_edit_singleline(&mut self.algo_search_query);
+        });
+
+        let query = self.algo_search_query.to_lowercase();
+        let filtered: Vec<_> =
+            dither_core::algorithms::ALL_ALGORITHMS.iter().filter(|info| query.is_empty() || info.name.to_lowercase().contains(&query)).collect();
+
+        egui::ComboBox::from_id_salt("algo_picker").width(240.0).selected_text(&self.selected_algo).show_ui(ui, |ui| {
+            if (query.is_empty() || "tonal band multi-dither".contains(&query))
+                && ui.selectable_value(&mut self.selected_algo, "Tonal Band Multi-Dither".into(), "Tonal Band Multi-Dither").clicked()
+            {
+                *changed = true;
+            }
+            if (query.is_empty() || "custom threshold matrix".contains(&query))
+                && ui.selectable_value(&mut self.selected_algo, "Custom Threshold Matrix".into(), "Custom Threshold Matrix").clicked()
+            {
+                *changed = true;
+            }
+            if (query.is_empty() || "morphogenesis (reaction-diffusion)".contains(&query))
+                && ui
+                    .selectable_value(&mut self.selected_algo, "Morphogenesis (Reaction-Diffusion)".into(), "Morphogenesis (Reaction-Diffusion)")
+                    .clicked()
+            {
+                *changed = true;
+            }
+            if (query.is_empty() || "vector flow field".contains(&query))
+                && ui.selectable_value(&mut self.selected_algo, "Vector Flow Field".into(), "Vector Flow Field").clicked()
+            {
+                *changed = true;
+            }
+            for info in filtered {
+                if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
+                    *changed = true;
+                }
+            }
+        });
+
+        if self.selected_algo.to_lowercase().contains("cmyk") {
+            ui.separator();
+            ui.label("CMYK Rosette Halftone Controls:");
+            ui.horizontal(|ui| {
+                ui.label("Dot Shape:");
+                egui::ComboBox::from_id_salt("cmyk_dot_shape")
+                    .selected_text(match self.cmyk_dot_shape {
+                        HalftoneDotShape::EuclideanRound => "Euclidean Round",
+                        HalftoneDotShape::Elliptical => "Elliptical",
+                        HalftoneDotShape::Diamond => "Diamond",
+                        HalftoneDotShape::Line => "Line",
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::EuclideanRound, "Euclidean Round").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Elliptical, "Elliptical").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Diamond, "Diamond").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Line, "Line").clicked() {
+                            *changed = true;
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Dot Gain:");
+                let slider =
+                    egui::Slider::new(&mut self.cmyk_dot_gain, -0.2..=0.4).text("% gain").custom_formatter(|n, _| format!("{:.0}%", n * 100.0));
+                check_slider(ui, slider, changed, preview_changed);
+            });
+        }
+
+        if self.selected_algo.to_lowercase().contains("tonal band") {
+            ui.separator();
+            ui.label("Tonal Band Multi-Dither Controls:");
+            ui.horizontal(|ui| {
+                ui.label("Shadows:");
+                egui::ComboBox::from_id_salt("tonal_shadow_algo").selected_text(&self.tonal_shadow_algo).show_ui(ui, |ui| {
+                    for name in ["Bayer 8x8", "Bayer 4x4", "Floyd-Steinberg", "Atkinson", "Stucki", "Jarvis-Judice-Ninke"] {
+                        if ui.selectable_value(&mut self.tonal_shadow_algo, name.into(), name).clicked() {
+                            *changed = true;
+                        }
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Midtones:");
+                egui::ComboBox::from_id_salt("tonal_mid_algo").selected_text(&self.tonal_mid_algo).show_ui(ui, |ui| {
+                    for name in ["Floyd-Steinberg", "Atkinson", "Burkes", "Sierra-3", "Bayer 8x8", "Interleaved Gradient Noise"] {
+                        if ui.selectable_value(&mut self.tonal_mid_algo, name.into(), name).clicked() {
+                            *changed = true;
+                        }
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Highlights:");
+                egui::ComboBox::from_id_salt("tonal_hi_algo").selected_text(&self.tonal_highlight_algo).show_ui(ui, |ui| {
+                    for name in ["Atkinson", "Floyd-Steinberg", "Bayer 4x4", "Bayer 8x8", "Ostromoukhov", "Riemersma"] {
+                        if ui.selectable_value(&mut self.tonal_highlight_algo, name.into(), name).clicked() {
+                            *changed = true;
+                        }
+                    }
+                });
+            });
+            check_slider(ui, egui::Slider::new(&mut self.tonal_shadow_threshold, 10..=128).text("Shadow Split"), changed, preview_changed);
+            check_slider(ui, egui::Slider::new(&mut self.tonal_highlight_threshold, 129..=245).text("Highlight Split"), changed, preview_changed);
+            check_slider(ui, egui::Slider::new(&mut self.tonal_feather, 2..=48).text("Feathering"), changed, preview_changed);
+        }
+
+        if self.selected_algo.to_lowercase().contains("custom") {
+            ui.separator();
+            ui.label("Custom Matrix Workshop:");
+            ui.label(format!("Active Matrix: {} ({}x{})", self.custom_matrix.name, self.custom_matrix.width, self.custom_matrix.height));
+            ui.horizontal(|ui| {
+                if ui.button("Spiral 4x4").clicked() {
+                    self.custom_matrix = CustomMatrixDither::default();
+                    *changed = true;
+                }
+                if ui.button("Checker 2x2").clicked()
+                    && let Ok(m) = CustomMatrixDither::new("Checker 2x2", 2, 2, vec![64, 192, 192, 64])
+                {
+                    self.custom_matrix = m;
+                    *changed = true;
+                }
+                if ui.button("Bayer 4x4").clicked() {
+                    let bayer = vec![0, 128, 32, 160, 192, 64, 224, 96, 48, 176, 16, 144, 240, 112, 208, 80];
+                    if let Ok(m) = CustomMatrixDither::new("Bayer 4x4 Variant", 4, 4, bayer) {
+                        self.custom_matrix = m;
+                        *changed = true;
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Import JSON...").clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("JSON Matrix", &["json"]).pick_file()
+                    && let Ok(json) = std::fs::read_to_string(&path)
+                    && let Ok(m) = CustomMatrixDither::from_json(&json)
+                {
+                    self.status_text = format!("Imported matrix: {} ({}x{})", m.name, m.width, m.height);
+                    self.custom_matrix = m;
+                    *changed = true;
+                }
+                if ui.button("Export JSON...").clicked() {
+                    let fname = format!("{}.json", self.custom_matrix.name.to_lowercase().replace(' ', "-"));
+                    if let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("JSON Matrix", &["json"]).save_file()
+                        && let Ok(json) = self.custom_matrix.to_json()
+                    {
+                        let _ = std::fs::write(&path, json);
+                        self.status_text = format!("Exported matrix to {}", path.display());
+                    }
+                }
+            });
+        }
+
+        if self.selected_algo.to_lowercase().contains("morphogenesis") || self.selected_algo.to_lowercase().contains("reaction-diffusion") {
+            ui.separator();
+            ui.label("Reaction-Diffusion Morphogenesis:");
+            ui.horizontal(|ui| {
+                ui.label("Regime:");
+                egui::ComboBox::from_id_salt("rd_morphology")
+                    .selected_text(match self.rd_morphology {
+                        ReactionDiffusionMorphology::Labyrinth => "Labyrinth",
+                        ReactionDiffusionMorphology::Spots => "Leopard Spots",
+                        ReactionDiffusionMorphology::Solitons => "Soliton Wavelets",
+                        ReactionDiffusionMorphology::PulsatingWaves => "Pulsating Waves",
+                        ReactionDiffusionMorphology::Fingerprints => "Fingerprint Ridges",
+                        ReactionDiffusionMorphology::Coral => "Branching Coral",
+                        _ => "Labyrinth",
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Labyrinth, "Labyrinth").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Spots, "Leopard Spots").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Solitons, "Soliton Wavelets").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::PulsatingWaves, "Pulsating Waves").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Fingerprints, "Fingerprint Ridges").clicked() {
+                            *changed = true;
+                        }
+                        if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Coral, "Branching Coral").clicked() {
+                            *changed = true;
+                        }
+                    });
+            });
+            check_slider(ui, egui::Slider::new(&mut self.rd_steps, 10..=200).text("PDE Steps"), changed, preview_changed);
+        }
+
+        if self.selected_algo.to_lowercase().contains("flow field") || self.selected_algo.to_lowercase().contains("vector flow") {
+            ui.separator();
+            ui.label("Vector Flow Field Steered Controls:");
+            check_slider(ui, egui::Slider::new(&mut self.flow_scale, 0.005..=0.20).text("Noise Scale"), changed, preview_changed);
+            check_slider(ui, egui::Slider::new(&mut self.flow_swirl, 0.0..=5.0).text("Vortex Swirl"), changed, preview_changed);
+        }
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Tonal Cycling:");
+            check_slider(ui, egui::Slider::new(&mut self.tonal_cycle_step, 0..=8).text("Cycle Step"), changed, preview_changed);
+        });
+    }
+
+    fn render_effects_stack_ui(&mut self, ui: &mut egui::Ui, changed: &mut bool, preview_changed: &mut bool) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Downstream Effects Stack:").strong());
+            if ui.button("🎲 Shuffle").on_hover_text("Randomize retro glitch, CRT, and bloom adjustments").clicked() {
+                self.shuffle_adjustments();
+                *changed = true;
+            }
+            if ui.button("↺ Reset").on_hover_text("Reset stack to defaults").clicked() {
+                self.effect_stack = EffectStack::default_stack();
+                *changed = true;
+            }
+        });
+
+        let mut move_up = None;
+        let mut move_down = None;
+        let mut duplicate_node = None;
+        let mut delete_node = None;
+        let num_nodes = self.effect_stack.nodes.len();
+
+        for (idx, node) in self.effect_stack.nodes.iter_mut().enumerate() {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    *changed |= ui.checkbox(&mut node.enabled, "").changed();
+                    ui.strong(&node.name);
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("🗑").on_hover_text("Delete layer").clicked() {
+                            delete_node = Some(idx);
+                        }
+                        if ui.small_button("📋").on_hover_text("Duplicate layer").clicked() {
+                            duplicate_node = Some(idx);
+                        }
+                        if idx + 1 < num_nodes && ui.small_button("⬇").on_hover_text("Move down").clicked() {
+                            move_down = Some(idx);
+                        }
+                        if idx > 0 && ui.small_button("⬆").on_hover_text("Move up").clicked() {
+                            move_up = Some(idx);
+                        }
+                    });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Blend:");
+                    egui::ComboBox::from_id_salt(format!("blend_{}", node.id)).selected_text(node.blend_mode.name()).show_ui(ui, |ui| {
+                        for mode in BlendMode::ALL {
+                            if ui.selectable_value(&mut node.blend_mode, mode, mode.name()).clicked() {
+                                *changed = true;
+                            }
+                        }
+                    });
+                    ui.label("α:");
+                    check_slider(ui, egui::Slider::new(&mut node.opacity, 0.0..=1.0).show_value(true), changed, preview_changed);
+                });
+
+                // Layer-specific parameter editors
+                match &mut node.kind {
+                    EffectKind::Glow(glow) => {
+                        check_slider(ui, egui::Slider::new(&mut glow.threshold, 50..=250).text("Threshold"), changed, preview_changed);
+                        check_slider(ui, egui::Slider::new(&mut glow.radius, 1..=12).text("Radius"), changed, preview_changed);
+                        check_slider(ui, egui::Slider::new(&mut glow.intensity, 0.1..=2.0).text("Intensity"), changed, preview_changed);
+                    }
+                    EffectKind::Chromatic(chroma) => {
+                        check_slider(ui, egui::Slider::new(&mut chroma.shift_x, -15..=15).text("Shift X"), changed, preview_changed);
+                        *changed |= ui.checkbox(&mut chroma.radial, "Radial Shift").changed();
+                    }
+                    EffectKind::Glitch(glitch) => {
+                        egui::ComboBox::from_id_salt(format!("glitch_mode_{}", node.id))
+                            .selected_text(match glitch.mode {
+                                JpegSubMode::BlockShift => "Block Shift",
+                                JpegSubMode::ChannelSwap => "Channel Swap",
+                                JpegSubMode::ScanLineOffset => "Scan Line Offset",
+                                JpegSubMode::BlockScramble => "Block Scramble",
+                                JpegSubMode::InterlaceCorruption => "Interlace Corruption",
+                            })
+                            .show_ui(ui, |ui| {
+                                for (m, lbl) in [
+                                    (JpegSubMode::BlockShift, "Block Shift"),
+                                    (JpegSubMode::ChannelSwap, "Channel Swap"),
+                                    (JpegSubMode::ScanLineOffset, "Scan Line Offset"),
+                                    (JpegSubMode::BlockScramble, "Block Scramble"),
+                                    (JpegSubMode::InterlaceCorruption, "Interlace Corruption"),
+                                ] {
+                                    if ui.selectable_value(&mut glitch.mode, m, lbl).clicked() {
+                                        *changed = true;
+                                    }
+                                }
+                            });
+                        check_slider(ui, egui::Slider::new(&mut glitch.intensity, 0.05..=1.0).text("Intensity"), changed, preview_changed);
+                    }
+                    EffectKind::Crt(crt) => {
+                        check_slider(ui, egui::Slider::new(&mut crt.scanline_intensity, 0.0..=1.0).text("Scanlines"), changed, preview_changed);
+                        check_slider(ui, egui::Slider::new(&mut crt.barrel_curvature, 0.0..=0.3).text("Barrel"), changed, preview_changed);
+                        check_slider(ui, egui::Slider::new(&mut crt.vignette_intensity, 0.0..=1.0).text("Vignette"), changed, preview_changed);
+                    }
+                    EffectKind::Blur(blur) => {
+                        check_slider(ui, egui::Slider::new(&mut blur.sigma, 0.2..=5.0).text("Sigma"), changed, preview_changed);
+                    }
+                    EffectKind::Sharpen(sharpen) => {
+                        check_slider(ui, egui::Slider::new(&mut sharpen.amount, 0.1..=3.0).text("Amount"), changed, preview_changed);
+                    }
+                    EffectKind::Lut3d(lut) => {
+                        ui.label(format!("3D LUT: '{}' ({}³)", lut.title, lut.size));
+                    }
+                }
+            });
+        }
+
+        if let Some(idx) = move_up {
+            self.effect_stack.move_up(idx);
+            *changed = true;
+        }
+        if let Some(idx) = move_down {
+            self.effect_stack.move_down(idx);
+            *changed = true;
+        }
+        if let Some(idx) = duplicate_node {
+            self.effect_stack.duplicate(idx);
+            *changed = true;
+        }
+        if let Some(idx) = delete_node {
+            self.effect_stack.remove(idx);
+            *changed = true;
+        }
+
+        // Add Effect Layer Dropdown
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("add_effect_dropdown").selected_text("➕ Add Effect Layer...").show_ui(ui, |ui| {
+                if ui.button("Epsilon Glow Bloom").clicked() {
+                    self.effect_stack.add(EffectNode::new(0, "Glow Bloom", EffectKind::Glow(EpsilonGlow::default())));
+                    *changed = true;
+                }
+                if ui.button("Chromatic Aberration").clicked() {
+                    self.effect_stack.add(EffectNode::new(0, "Chromatic Aberration", EffectKind::Chromatic(ChromaticAberration::default())));
+                    *changed = true;
+                }
+                if ui.button("JPEG Glitch Core").clicked() {
+                    self.effect_stack.add(EffectNode::new(0, "JPEG Glitch", EffectKind::Glitch(JpegGlitchCore::default())));
+                    *changed = true;
+                }
+                if ui.button("Vintage CRT Simulation").clicked() {
+                    self.effect_stack.add(EffectNode::new(0, "Vintage CRT", EffectKind::Crt(VintageCrtSimulation::default())));
+                    *changed = true;
+                }
+                if ui.button("Gaussian Blur").clicked() {
+                    self.effect_stack.add(EffectNode::new(0, "Gaussian Blur", EffectKind::Blur(GaussianBlur::default())));
+                    *changed = true;
+                }
+                if ui.button("Sharpen (Unsharp Mask)").clicked() {
+                    self.effect_stack.add(EffectNode::new(0, "Sharpen", EffectKind::Sharpen(Sharpen::default())));
+                    *changed = true;
+                }
+            });
+        });
+    }
+
+    fn render_crt_noise_ui(&mut self, ui: &mut egui::Ui, changed: &mut bool, preview_changed: &mut bool) {
+        ui.label(egui::RichText::new("CRT Arcade & Simulation:").strong());
+        check_slider(ui, egui::Slider::new(&mut self.crt_scanline, 0.0..=1.0).text("Scanlines"), changed, preview_changed);
+        check_slider(ui, egui::Slider::new(&mut self.crt_barrel, 0.0..=0.3).text("Barrel Curvature"), changed, preview_changed);
+        check_slider(ui, egui::Slider::new(&mut self.crt_vignette, 0.0..=1.0).text("Vignette Intensity"), changed, preview_changed);
+
+        ui.separator();
+        ui.label(egui::RichText::new("Temporal Noise Stream:").strong());
+        if ui.checkbox(&mut self.temporal_noise_enabled, "Live Noise Stream").changed() {
+            *changed = true;
+        }
+        if self.temporal_noise_enabled {
+            egui::ComboBox::from_id_salt("temporal_pattern_picker")
+                .selected_text(match self.temporal_pattern {
+                    TemporalNoisePattern::CrtScanBeamJitter => "CRT Scan Beam Jitter",
+                    TemporalNoisePattern::PhosphorGrainHum => "Phosphor Grain Hum",
+                    TemporalNoisePattern::InterlacedFieldShimmer => "Interlaced Field Shimmer",
+                    TemporalNoisePattern::LcdSubpixelGridDrift => "LCD Grid Drift",
+                    TemporalNoisePattern::VhsTapePhaseNoise => "VHS Phase Noise",
+                    TemporalNoisePattern::ThermalAnalogDrift => "Thermal Analog Drift",
+                    TemporalNoisePattern::StaticHashWhiteNoise => "Static Hash Noise",
+                    TemporalNoisePattern::BayerPhaseStepping => "Bayer Phase Stepping",
+                    TemporalNoisePattern::BlueNoiseTemporalJitter => "Blue Noise Jitter",
+                })
+                .show_ui(ui, |ui| {
+                    for (pat, label) in [
+                        (TemporalNoisePattern::CrtScanBeamJitter, "CRT Scan Beam Jitter"),
+                        (TemporalNoisePattern::PhosphorGrainHum, "Phosphor Grain Hum"),
+                        (TemporalNoisePattern::InterlacedFieldShimmer, "Interlaced Field Shimmer"),
+                        (TemporalNoisePattern::LcdSubpixelGridDrift, "LCD Grid Drift"),
+                        (TemporalNoisePattern::VhsTapePhaseNoise, "VHS Phase Noise"),
+                        (TemporalNoisePattern::ThermalAnalogDrift, "Thermal Analog Drift"),
+                        (TemporalNoisePattern::StaticHashWhiteNoise, "Static Hash Noise"),
+                        (TemporalNoisePattern::BayerPhaseStepping, "Bayer Phase Stepping"),
+                        (TemporalNoisePattern::BlueNoiseTemporalJitter, "Blue Noise Jitter"),
+                    ] {
+                        if ui.selectable_value(&mut self.temporal_pattern, pat, label).clicked() {
+                            *changed = true;
+                        }
+                    }
+                });
+
+            check_slider(ui, egui::Slider::new(&mut self.temporal_intensity, 0.05..=1.0).text("Noise Intensity"), changed, preview_changed);
+        }
+
+        ui.separator();
+        ui.label(egui::RichText::new("Preview & Interaction:").strong());
+        ui.checkbox(&mut self.debounce_mode, "Debounce Rendering");
+        ui.checkbox(&mut self.fine_wheel_increment, "Fine Wheel Increment");
+    }
 }
 
 #[inline]
@@ -3423,6 +4343,18 @@ impl eframe::App for DitherCraftApp {
         // Toggle Visual Preset Browser (Ctrl+Shift+P)
         if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.modifiers.shift && i.key_pressed(egui::Key::P)) {
             self.show_preset_browser_modal = !self.show_preset_browser_modal;
+        }
+
+        // Toggle Left Tools Sidebar (Ctrl+[)
+        if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::OpenBracket)) {
+            self.show_left_sidebar = !self.show_left_sidebar;
+            self.status_text = format!("Left Tools Sidebar: {}", if self.show_left_sidebar { "ON" } else { "OFF" });
+        }
+
+        // Toggle Right DSP Sidebar (Ctrl+])
+        if ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::CloseBracket)) {
+            self.show_right_sidebar = !self.show_right_sidebar;
+            self.status_text = format!("Right DSP Sidebar: {}", if self.show_right_sidebar { "ON" } else { "OFF" });
         }
 
         // Handle Drag & Drop Router
@@ -4286,6 +5218,9 @@ impl eframe::App for DitherCraftApp {
                 });
 
                 ui.menu_button("View", |ui| {
+                    ui.checkbox(&mut self.show_left_sidebar, "Left Tools Sidebar (Ctrl+[)");
+                    ui.checkbox(&mut self.show_right_sidebar, "Right DSP Sidebar (Ctrl+])");
+                    ui.separator();
                     ui.checkbox(&mut self.show_rulers, "Pixel Rulers (Ctrl+R)");
                     ui.checkbox(&mut self.show_guides, "Guide Lines (Ctrl+;)");
                     if ui.button("Add Center Guides").clicked() {
@@ -5352,933 +6287,101 @@ impl eframe::App for DitherCraftApp {
             }
         }
 
-        // Left Control Panel
-        if self.workflow_mode != WorkflowLayoutMode::ZenFocus {
-            egui::SidePanel::left("control_panel").min_width(280.0_f32).show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if let Some(ref logo) = self.logo_texture {
-                        ui.image((logo.id(), egui::vec2(24.0, 24.0)));
-                    }
-                    ui.heading("DitherCraft Studio");
-                });
-                ui.separator();
+        let mut changed = false;
+        let mut preview_changed = false;
 
-                let mut changed = false;
-                let mut preview_changed = false;
-
-                // Pre-Dither Tone Levels & Gamma
-                ui.group(|ui| {
+        // Left Tools & Masking Sidebar
+        if self.workflow_mode != WorkflowLayoutMode::ZenFocus && self.show_left_sidebar {
+            egui::SidePanel::left("left_tools_panel").resizable(true).min_width(260.0_f32).default_width(290.0_f32).max_width(420.0_f32).show(
+                ctx,
+                |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Input Levels & Gamma:");
-                        if ui.button("↺ Reset").on_hover_text("Reset Tone Levels (Black 0, White 255, Gamma 1.0)").clicked() {
-                            self.levels_black = 0;
-                            self.levels_white = 255;
-                            self.levels_gamma = 1.0;
-                            changed = true;
+                        if let Some(ref logo) = self.logo_texture {
+                            ui.image((logo.id(), egui::vec2(20.0, 20.0)));
                         }
+                        ui.heading("Tools & Assets");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("◀").on_hover_text("Collapse Left Sidebar (Ctrl+[)").clicked() {
+                                self.show_left_sidebar = false;
+                            }
+                        });
                     });
-                    check_slider(ui, egui::Slider::new(&mut self.levels_black, 0..=254).text("Black Point"), &mut changed, &mut preview_changed);
-                    if self.levels_black >= self.levels_white {
-                        self.levels_white = self.levels_black + 1;
-                    }
-                    check_slider(ui, egui::Slider::new(&mut self.levels_white, 1..=255).text("White Point"), &mut changed, &mut preview_changed);
-                    if self.levels_white <= self.levels_black {
-                        self.levels_black = self.levels_white.saturating_sub(1);
-                    }
-                    check_slider(
-                        ui,
-                        egui::Slider::new(&mut self.levels_gamma, 0.1..=3.0).text("Midtone Gamma").logarithmic(true),
-                        &mut changed,
-                        &mut preview_changed,
-                    );
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button("📈 Parametric Tone Curves...")
-                            .on_hover_text("Open interactive monotonic Hermite tone curves workshop")
-                            .clicked()
-                        {
-                            self.show_curves_dialog = true;
-                        }
-                        if !self.tone_curve.is_identity() && ui.button("↺ Reset Curve").on_hover_text("Reset tone curve to identity linear").clicked()
-                        {
-                            self.tone_curve.reset_linear();
-                            changed = true;
-                        }
-                    });
-                });
-
-                // Workstation Tools, Masking & Selection
-                ui.group(|ui| {
-                    ui.label("Workstation Tools & Masking:");
-                    ui.horizontal_wrapped(|ui| {
-                        for tool in WorkstationTool::ALL {
-                            if ui.selectable_label(self.active_tool == tool, tool.label()).clicked() {
-                                self.active_tool = tool;
-                            }
-                        }
-                    });
-
-                    match self.active_tool {
-                        WorkstationTool::BrushMask | WorkstationTool::EraserMask => {
-                            ui.horizontal(|ui| {
-                                ui.label("Radius:");
-                                ui.add(egui::Slider::new(&mut self.brush_radius, 1.0..=128.0).text("px"));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Falloff:");
-                                ui.add(egui::Slider::new(&mut self.brush_falloff, 0.0..=1.0).text("Hardness"));
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Linear Grad").on_hover_text("Apply procedural linear gradient to mask").clicked()
-                                    && let Some(ref mut m) = self.mask
-                                {
-                                    m.apply_linear_gradient(0.0, 0.0, m.width as f32, 0.0);
-                                    if self.mask_blend_enabled {
-                                        changed = true;
-                                    } else {
-                                        self.update_texture(ctx);
-                                    }
-                                }
-                                if ui.button("Radial Grad").on_hover_text("Apply procedural radial gradient to mask").clicked()
-                                    && let Some(ref mut m) = self.mask
-                                {
-                                    let cx = m.width as f32 * 0.5;
-                                    let cy = m.height as f32 * 0.5;
-                                    m.apply_radial_gradient(cx, cy, 0.0, cx.min(cy));
-                                    if self.mask_blend_enabled {
-                                        changed = true;
-                                    } else {
-                                        self.update_texture(ctx);
-                                    }
-                                }
-                                if ui.button("Invert").on_hover_text("Invert alpha mask").clicked()
-                                    && let Some(ref mut m) = self.mask
-                                {
-                                    m.invert();
-                                    if self.mask_blend_enabled {
-                                        changed = true;
-                                    } else {
-                                        self.update_texture(ctx);
-                                    }
-                                }
-                                if ui.button("Clear").on_hover_text("Clear mask to 0").clicked()
-                                    && let Some(ref mut m) = self.mask
-                                {
-                                    m.clear();
-                                    if self.mask_blend_enabled {
-                                        changed = true;
-                                    } else {
-                                        self.update_texture(ctx);
-                                    }
-                                }
-                            });
-                            if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
-                                self.update_texture(ctx);
-                            }
-                            ui.collapsing("Parametric Range Masks (Luminance & Proximity)", |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Presets:");
-                                    if ui.button("Shadows").clicked() {
-                                        self.apply_mask_luminance_range(0.0, 85.0, 16.0);
-                                        if self.mask_blend_enabled {
-                                            changed = true;
-                                        } else {
-                                            self.update_texture(ctx);
-                                        }
-                                    }
-                                    if ui.button("Midtones").clicked() {
-                                        self.apply_mask_luminance_range(64.0, 192.0, 16.0);
-                                        if self.mask_blend_enabled {
-                                            changed = true;
-                                        } else {
-                                            self.update_texture(ctx);
-                                        }
-                                    }
-                                    if ui.button("Highlights").clicked() {
-                                        self.apply_mask_luminance_range(170.0, 255.0, 16.0);
-                                        if self.mask_blend_enabled {
-                                            changed = true;
-                                        } else {
-                                            self.update_texture(ctx);
-                                        }
-                                    }
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Min Lum:");
-                                    ui.add(egui::Slider::new(&mut self.mask_lum_min, 0.0..=255.0));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Max Lum:");
-                                    ui.add(egui::Slider::new(&mut self.mask_lum_max, 0.0..=255.0));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Feather:");
-                                    ui.add(egui::Slider::new(&mut self.mask_lum_feather, 0.0..=64.0));
-                                });
-                                if ui.button("Extract Luminance Mask").clicked() {
-                                    self.apply_mask_luminance_range(self.mask_lum_min, self.mask_lum_max, self.mask_lum_feather);
-                                    if self.mask_blend_enabled {
-                                        changed = true;
-                                    } else {
-                                        self.update_texture(ctx);
-                                    }
-                                }
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    ui.label("Proximity Color:");
-                                    ui.color_edit_button_srgb(&mut self.mask_sample_color);
-                                    ui.add(egui::Slider::new(&mut self.mask_color_tolerance, 0.01..=0.50).text("Tol"));
-                                });
-                                if ui.button("Extract Color Proximity Mask").clicked() {
-                                    let col = RgbColor::new(self.mask_sample_color[0], self.mask_sample_color[1], self.mask_sample_color[2]);
-                                    self.apply_mask_color_proximity(col, self.mask_color_tolerance);
-                                    if self.mask_blend_enabled {
-                                        changed = true;
-                                    } else {
-                                        self.update_texture(ctx);
-                                    }
-                                }
-                            });
-                        }
-                        WorkstationTool::RectMarquee | WorkstationTool::EllipseMarquee | WorkstationTool::Lasso | WorkstationTool::MagicWand => {
-                            ui.horizontal(|ui| {
-                                ui.label("Mode:");
-                                egui::ComboBox::from_id_salt("selection_mode_combo")
-                                    .selected_text(match self.selection_mode {
-                                        SelectionMode::New => "New",
-                                        SelectionMode::Add => "Add (+)",
-                                        SelectionMode::Subtract => "Subtract (-)",
-                                        SelectionMode::Intersect => "Intersect (∩)",
-                                    })
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::New, "New");
-                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::Add, "Add (+)");
-                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::Subtract, "Subtract (-)");
-                                        ui.selectable_value(&mut self.selection_mode, SelectionMode::Intersect, "Intersect (∩)");
-                                    });
-                            });
-                            if self.active_tool == WorkstationTool::MagicWand {
-                                ui.horizontal(|ui| {
-                                    ui.label("Wand Tolerance:");
-                                    ui.add(egui::Slider::new(&mut self.wand_tolerance, 0.01..=0.50).text("OKLab ΔE"));
-                                });
-                            }
-                            ui.horizontal(|ui| {
-                                if ui.button("Select All").clicked() {
-                                    self.select_all();
-                                }
-                                if ui.button("Deselect").clicked() {
-                                    self.deselect();
-                                }
-                                if ui.button("Invert").clicked() {
-                                    self.invert_selection();
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Selection ➔ Mask").on_hover_text("Bake active marquee selection into mask").clicked() {
-                                    self.convert_selection_to_mask();
-                                    if self.mask_blend_enabled {
-                                        changed = true;
-                                    } else {
-                                        self.update_texture(ctx);
-                                    }
-                                }
-                                if ui.button("Mask ➔ Selection").on_hover_text("Extract marquee selection from mask threshold").clicked() {
-                                    self.convert_mask_to_selection();
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Modify Radius:");
-                                ui.add(egui::Slider::new(&mut self.selection_modify_radius, 1..=32).text("px"));
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Feather").on_hover_text("Feather selection edges").clicked() {
-                                    self.feather_selection(self.selection_modify_radius);
-                                }
-                                if ui.button("Expand (+)").on_hover_text("Expand selection by N pixels").clicked() {
-                                    self.expand_selection(self.selection_modify_radius);
-                                }
-                                if ui.button("Contract (-)").on_hover_text("Contract selection by N pixels").clicked() {
-                                    self.contract_selection(self.selection_modify_radius);
-                                }
-                            });
-                            if let Some(sel) = self.selection.as_ref()
-                                && let Some((bx, by, bw, bh)) = sel.bounding_box()
-                            {
-                                ui.label(format!("Bounds: ({bx}, {by}) {bw}x{bh} px"));
-                            }
-                        }
-                        WorkstationTool::Pointer => {
-                            ui.label("Drag canvas to pan, scroll to zoom.");
-                            if ui.checkbox(&mut self.quick_mask_active, "Quick Mask Overlay (Q)").changed() {
-                                self.update_texture(ctx);
-                            }
-                        }
-                    }
-
-                    // Dual-Algorithm Spatial Blending
                     ui.separator();
-                    if ui.checkbox(&mut self.mask_blend_enabled, "Dual-Algorithm Mask Blending").changed() {
-                        changed = true;
-                    }
-                    if self.mask_blend_enabled {
-                        ui.horizontal(|ui| {
-                            ui.label("Secondary:");
-                            egui::ComboBox::from_id_salt("secondary_algo_picker").width(180.0).selected_text(&self.secondary_algo).show_ui(
-                                ui,
-                                |ui| {
-                                    for info in dither_core::algorithms::ALL_ALGORITHMS.iter() {
-                                        if ui.selectable_value(&mut self.secondary_algo, info.name.to_string(), info.name).clicked() {
-                                            changed = true;
-                                        }
-                                    }
-                                },
-                            );
-                        });
-                        ui.label(egui::RichText::new("Primary algo applies to Mask > 0; Secondary applies to Mask = 0.").italics().size(10.5));
-                    }
-                });
 
-                // Algorithm Search & Picker
-                ui.group(|ui| {
-                    ui.label("Dithering Algorithm:");
+                    // Tab selector pills
+                    ui.horizontal_wrapped(|ui| {
+                        for tab in LeftPanelTab::ALL {
+                            if ui.selectable_label(self.left_panel_tab == tab, tab.label()).clicked() {
+                                self.left_panel_tab = tab;
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| match self.left_panel_tab {
+                        LeftPanelTab::ToolsMasking => {
+                            self.render_tools_masking_ui(ui, ctx, &mut changed);
+                        }
+                        LeftPanelTab::PaletteStudio => {
+                            self.render_palette_studio_ui(ui, &mut changed);
+                        }
+                        LeftPanelTab::LevelsCurves => {
+                            self.render_levels_curves_ui(ui, &mut changed, &mut preview_changed);
+                        }
+                    });
+                },
+            );
+        }
+
+        // Right DSP Pipeline & Effects Sidebar
+        if self.workflow_mode != WorkflowLayoutMode::ZenFocus && self.show_right_sidebar {
+            egui::SidePanel::right("right_dsp_panel").resizable(true).min_width(280.0_f32).default_width(320.0_f32).max_width(500.0_f32).show(
+                ctx,
+                |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Search:");
-                        ui.text_edit_singleline(&mut self.algo_search_query);
+                        if ui.button("▶").on_hover_text("Collapse Right Sidebar (Ctrl+])").clicked() {
+                            self.show_right_sidebar = false;
+                        }
+                        ui.heading("DSP & Effects");
                     });
+                    ui.separator();
 
-                    let query = self.algo_search_query.to_lowercase();
-                    let filtered: Vec<_> = dither_core::algorithms::ALL_ALGORITHMS
-                        .iter()
-                        .filter(|info| query.is_empty() || info.name.to_lowercase().contains(&query))
-                        .collect();
-
-                    egui::ComboBox::from_id_salt("algo_picker").width(240.0).selected_text(&self.selected_algo).show_ui(ui, |ui| {
-                        if (query.is_empty() || "tonal band multi-dither".contains(&query))
-                            && ui.selectable_value(&mut self.selected_algo, "Tonal Band Multi-Dither".into(), "Tonal Band Multi-Dither").clicked()
-                        {
-                            changed = true;
-                        }
-                        if (query.is_empty() || "custom threshold matrix".contains(&query))
-                            && ui.selectable_value(&mut self.selected_algo, "Custom Threshold Matrix".into(), "Custom Threshold Matrix").clicked()
-                        {
-                            changed = true;
-                        }
-                        if (query.is_empty() || "morphogenesis (reaction-diffusion)".contains(&query))
-                            && ui
-                                .selectable_value(
-                                    &mut self.selected_algo,
-                                    "Morphogenesis (Reaction-Diffusion)".into(),
-                                    "Morphogenesis (Reaction-Diffusion)",
-                                )
-                                .clicked()
-                        {
-                            changed = true;
-                        }
-                        if (query.is_empty() || "vector flow field".contains(&query))
-                            && ui.selectable_value(&mut self.selected_algo, "Vector Flow Field".into(), "Vector Flow Field").clicked()
-                        {
-                            changed = true;
-                        }
-                        for info in filtered {
-                            if ui.selectable_value(&mut self.selected_algo, info.name.into(), info.name).clicked() {
-                                changed = true;
+                    // Tab selector pills
+                    ui.horizontal_wrapped(|ui| {
+                        for tab in RightPanelTab::ALL {
+                            if ui.selectable_label(self.right_panel_tab == tab, tab.label()).clicked() {
+                                self.right_panel_tab = tab;
                             }
                         }
                     });
+                    ui.separator();
 
-                    if self.selected_algo.to_lowercase().contains("cmyk") {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        match self.right_panel_tab {
+                            RightPanelTab::Algorithm => {
+                                self.render_algorithm_ui(ui, &mut changed, &mut preview_changed);
+                            }
+                            RightPanelTab::EffectsStack => {
+                                self.render_effects_stack_ui(ui, &mut changed, &mut preview_changed);
+                            }
+                            RightPanelTab::CrtNoise => {
+                                self.render_crt_noise_ui(ui, &mut changed, &mut preview_changed);
+                            }
+                        }
+
                         ui.separator();
-                        ui.label("CMYK Rosette Halftone Controls:");
-                        ui.horizontal(|ui| {
-                            ui.label("Dot Shape:");
-                            egui::ComboBox::from_id_salt("cmyk_dot_shape")
-                                .selected_text(match self.cmyk_dot_shape {
-                                    HalftoneDotShape::EuclideanRound => "Euclidean Round",
-                                    HalftoneDotShape::Elliptical => "Elliptical",
-                                    HalftoneDotShape::Diamond => "Diamond",
-                                    HalftoneDotShape::Line => "Line",
-                                })
-                                .show_ui(ui, |ui| {
-                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::EuclideanRound, "Euclidean Round").clicked() {
-                                        changed = true;
-                                    }
-                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Elliptical, "Elliptical").clicked() {
-                                        changed = true;
-                                    }
-                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Diamond, "Diamond").clicked() {
-                                        changed = true;
-                                    }
-                                    if ui.selectable_value(&mut self.cmyk_dot_shape, HalftoneDotShape::Line, "Line").clicked() {
-                                        changed = true;
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Dot Gain:");
-                            let slider = egui::Slider::new(&mut self.cmyk_dot_gain, -0.2..=0.4)
-                                .text("% gain")
-                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0));
-                            check_slider(ui, slider, &mut changed, &mut preview_changed);
-                        });
-                    }
-
-                    if self.selected_algo.to_lowercase().contains("tonal band") {
-                        ui.separator();
-                        ui.label("Tonal Band Multi-Dither Controls:");
-                        ui.horizontal(|ui| {
-                            ui.label("Shadows:");
-                            egui::ComboBox::from_id_salt("tonal_shadow_algo").selected_text(&self.tonal_shadow_algo).show_ui(ui, |ui| {
-                                for name in ["Bayer 8x8", "Bayer 4x4", "Floyd-Steinberg", "Atkinson", "Stucki", "Jarvis-Judice-Ninke"] {
-                                    if ui.selectable_value(&mut self.tonal_shadow_algo, name.into(), name).clicked() {
-                                        changed = true;
-                                    }
-                                }
-                            });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Midtones:");
-                            egui::ComboBox::from_id_salt("tonal_mid_algo").selected_text(&self.tonal_mid_algo).show_ui(ui, |ui| {
-                                for name in ["Floyd-Steinberg", "Atkinson", "Burkes", "Sierra-3", "Bayer 8x8", "Interleaved Gradient Noise"] {
-                                    if ui.selectable_value(&mut self.tonal_mid_algo, name.into(), name).clicked() {
-                                        changed = true;
-                                    }
-                                }
-                            });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Highlights:");
-                            egui::ComboBox::from_id_salt("tonal_hi_algo").selected_text(&self.tonal_highlight_algo).show_ui(ui, |ui| {
-                                for name in ["Atkinson", "Floyd-Steinberg", "Bayer 4x4", "Bayer 8x8", "Ostromoukhov", "Riemersma"] {
-                                    if ui.selectable_value(&mut self.tonal_highlight_algo, name.into(), name).clicked() {
-                                        changed = true;
-                                    }
-                                }
-                            });
-                        });
-                        check_slider(
-                            ui,
-                            egui::Slider::new(&mut self.tonal_shadow_threshold, 10..=128).text("Shadow Split"),
-                            &mut changed,
-                            &mut preview_changed,
-                        );
-                        check_slider(
-                            ui,
-                            egui::Slider::new(&mut self.tonal_highlight_threshold, 129..=245).text("Highlight Split"),
-                            &mut changed,
-                            &mut preview_changed,
-                        );
-                        check_slider(ui, egui::Slider::new(&mut self.tonal_feather, 2..=48).text("Feathering"), &mut changed, &mut preview_changed);
-                    }
-
-                    if self.selected_algo.to_lowercase().contains("custom") {
-                        ui.separator();
-                        ui.label("Custom Matrix Workshop:");
-                        ui.label(format!("Active Matrix: {} ({}x{})", self.custom_matrix.name, self.custom_matrix.width, self.custom_matrix.height));
-                        ui.horizontal(|ui| {
-                            if ui.button("Spiral 4x4").clicked() {
-                                self.custom_matrix = CustomMatrixDither::default();
-                                changed = true;
-                            }
-                            if ui.button("Checker 2x2").clicked()
-                                && let Ok(m) = CustomMatrixDither::new("Checker 2x2", 2, 2, vec![64, 192, 192, 64])
-                            {
-                                self.custom_matrix = m;
-                                changed = true;
-                            }
-                            if ui.button("Bayer 4x4").clicked() {
-                                let bayer = vec![0, 128, 32, 160, 192, 64, 224, 96, 48, 176, 16, 144, 240, 112, 208, 80];
-                                if let Ok(m) = CustomMatrixDither::new("Bayer 4x4 Variant", 4, 4, bayer) {
-                                    self.custom_matrix = m;
-                                    changed = true;
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            if ui.button("Import JSON...").clicked()
-                                && let Some(path) = rfd::FileDialog::new().add_filter("JSON Matrix", &["json"]).pick_file()
-                                && let Ok(json) = std::fs::read_to_string(&path)
-                                && let Ok(m) = CustomMatrixDither::from_json(&json)
-                            {
-                                self.status_text = format!("Imported matrix: {} ({}x{})", m.name, m.width, m.height);
-                                self.custom_matrix = m;
-                                changed = true;
-                            }
-                            if ui.button("Export JSON...").clicked() {
-                                let fname = format!("{}.json", self.custom_matrix.name.to_lowercase().replace(' ', "-"));
-                                if let Some(path) = rfd::FileDialog::new().set_file_name(&fname).add_filter("JSON Matrix", &["json"]).save_file()
-                                    && let Ok(json) = self.custom_matrix.to_json()
-                                {
-                                    let _ = std::fs::write(&path, json);
-                                    self.status_text = format!("Exported matrix to {}", path.display());
-                                }
-                            }
-                        });
-                    }
-
-                    if self.selected_algo.to_lowercase().contains("morphogenesis") || self.selected_algo.to_lowercase().contains("reaction-diffusion")
-                    {
-                        ui.separator();
-                        ui.label("Reaction-Diffusion Morphogenesis:");
-                        ui.horizontal(|ui| {
-                            ui.label("Regime:");
-                            egui::ComboBox::from_id_salt("rd_morphology")
-                                .selected_text(match self.rd_morphology {
-                                    ReactionDiffusionMorphology::Labyrinth => "Labyrinth",
-                                    ReactionDiffusionMorphology::Spots => "Leopard Spots",
-                                    ReactionDiffusionMorphology::Solitons => "Soliton Wavelets",
-                                    ReactionDiffusionMorphology::PulsatingWaves => "Pulsating Waves",
-                                    ReactionDiffusionMorphology::Fingerprints => "Fingerprint Ridges",
-                                    ReactionDiffusionMorphology::Coral => "Branching Coral",
-                                    _ => "Labyrinth",
-                                })
-                                .show_ui(ui, |ui| {
-                                    if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Labyrinth, "Labyrinth").clicked() {
-                                        changed = true;
-                                    }
-                                    if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Spots, "Leopard Spots").clicked() {
-                                        changed = true;
-                                    }
-                                    if ui
-                                        .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Solitons, "Soliton Wavelets")
-                                        .clicked()
-                                    {
-                                        changed = true;
-                                    }
-                                    if ui
-                                        .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::PulsatingWaves, "Pulsating Waves")
-                                        .clicked()
-                                    {
-                                        changed = true;
-                                    }
-                                    if ui
-                                        .selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Fingerprints, "Fingerprint Ridges")
-                                        .clicked()
-                                    {
-                                        changed = true;
-                                    }
-                                    if ui.selectable_value(&mut self.rd_morphology, ReactionDiffusionMorphology::Coral, "Branching Coral").clicked() {
-                                        changed = true;
-                                    }
-                                });
-                        });
-                        check_slider(ui, egui::Slider::new(&mut self.rd_steps, 10..=200).text("PDE Steps"), &mut changed, &mut preview_changed);
-                    }
-
-                    if self.selected_algo.to_lowercase().contains("flow field") || self.selected_algo.to_lowercase().contains("vector flow") {
-                        ui.separator();
-                        ui.label("Vector Flow Field Steered Controls:");
-                        check_slider(
-                            ui,
-                            egui::Slider::new(&mut self.flow_scale, 0.005..=0.20).text("Noise Scale"),
-                            &mut changed,
-                            &mut preview_changed,
-                        );
-                        check_slider(ui, egui::Slider::new(&mut self.flow_swirl, 0.0..=5.0).text("Vortex Swirl"), &mut changed, &mut preview_changed);
-                    }
-                });
-
-                // Palette Controls & Color Science
-                ui.group(|ui| {
-                    ui.label("Target Palette & Metric:");
-                    let palettes =
-                        ["Monochrome", "Macintosh 1-bit", "Game Boy", "CGA Mode 1", "Cyberpunk", "Apple II", "Commodore 64", "NES", "PICO-8"];
-                    egui::ComboBox::from_id_salt("palette_picker").selected_text(&self.selected_palette_name).show_ui(ui, |ui| {
-                        for p in palettes {
-                            if ui.selectable_label(self.selected_palette_name == p, p).clicked() {
-                                self.selected_palette_name = p.into();
-                                let metric = self.active_palette.metric;
-                                self.active_palette = match p {
-                                    "Monochrome" => Palette::monochrome(),
-                                    "Macintosh 1-bit" => Palette::mac_1bit(),
-                                    "CGA Mode 1" => Palette::cga_mode_1(),
-                                    "Cyberpunk" => Palette::cyberpunk(),
-                                    "Apple II" => Palette::apple_ii(),
-                                    "Commodore 64" => Palette::commodore_64(),
-                                    "NES" => Palette::nes(),
-                                    "PICO-8" => Palette::pico_8(),
-                                    _ => Palette::game_boy(),
-                                };
-                                self.active_palette.metric = metric;
-                                changed = true;
-                            }
-                        }
+                        ui.checkbox(&mut self.debounce_mode, "Debounce Rendering");
+                        ui.checkbox(&mut self.fine_wheel_increment, "Fine Wheel Increment");
                     });
+                },
+            );
+        }
 
-                    // Color Metric Selection
-                    egui::ComboBox::from_id_salt("color_metric_picker")
-                        .selected_text(match self.active_palette.metric {
-                            ColorMetric::Redmean => "Redmean (Perceptual)",
-                            ColorMetric::EuclideanRgb => "Euclidean RGB",
-                            ColorMetric::CieLab => "CIELAB ΔE*",
-                            ColorMetric::Oklab => "OKLab (Perceptual)",
-                            ColorMetric::Ciede2000 => "CIEDE2000 ΔE00",
-                        })
-                        .show_ui(ui, |ui| {
-                            for (metric, label) in [
-                                (ColorMetric::Oklab, "OKLab (Perceptual)"),
-                                (ColorMetric::Ciede2000, "CIEDE2000 ΔE00"),
-                                (ColorMetric::Redmean, "Redmean (Perceptual)"),
-                                (ColorMetric::EuclideanRgb, "Euclidean RGB"),
-                                (ColorMetric::CieLab, "CIELAB ΔE*"),
-                            ] {
-                                if ui.selectable_value(&mut self.active_palette.metric, metric, label).clicked() {
-                                    changed = true;
-                                }
-                            }
-                        });
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Sort Lum").clicked() {
-                            self.active_palette.sort_by_luminance(true);
-                            changed = true;
-                        }
-                        if ui.button("Randomize").clicked() {
-                            self.active_palette.randomize_unlocked(Instant::now().elapsed().as_nanos() as u64);
-                            changed = true;
-                        }
-                        if ui.button("Prune Dead").on_hover_text("Prune unlocked swatches with <0.1% usage").clicked()
-                            && !self.swatch_percentages.is_empty()
-                            && self.active_palette.swatches.len() == self.swatch_percentages.len()
-                        {
-                            let mut pruned = Vec::new();
-                            for (i, swatch) in self.active_palette.swatches.iter().enumerate() {
-                                let pct = self.swatch_percentages.get(i).copied().unwrap_or(0.0);
-                                if swatch.locked || pct >= 0.1 {
-                                    pruned.push(*swatch);
-                                }
-                            }
-                            if !pruned.is_empty() && pruned.len() < self.active_palette.swatches.len() {
-                                self.active_palette.swatches = pruned;
-                                changed = true;
-                            }
-                        }
-                    });
-
-                    // Swatches list with live color pickers, locks, utilization, and add/remove buttons
-                    ui.label("Swatches & Live Palette Editing:");
-                    let mut lock_changed = false;
-                    let mut delete_idx = None;
-                    let num_swatches = self.active_palette.swatches.len();
-                    for (idx, swatch) in self.active_palette.swatches.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            let mut rgb = [swatch.color.r, swatch.color.g, swatch.color.b];
-                            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                                swatch.color = RgbColor::new(rgb[0], rgb[1], rgb[2]);
-                                lock_changed = true;
-                            }
-                            if ui.checkbox(&mut swatch.locked, "Lock").changed() {
-                                lock_changed = true;
-                            }
-                            if let Some(&pct) = self.swatch_percentages.get(idx) {
-                                ui.label(format!("{pct:4.1}%"));
-                            }
-                            if num_swatches > 1 && ui.small_button("✕").on_hover_text("Remove swatch").clicked() {
-                                delete_idx = Some(idx);
-                            }
-                        });
-                    }
-                    if let Some(d) = delete_idx {
-                        self.active_palette.swatches.remove(d);
-                        changed = true;
-                    }
-                    ui.horizontal(|ui| {
-                        if ui.button("+ Add Swatch").clicked() {
-                            self.active_palette.swatches.push(Swatch::new(RgbColor::new(128, 128, 128), false));
-                            changed = true;
-                        }
-                        if ui.button("🎨 Harmonies...").on_hover_text("Generate balanced OKLCH perceptual harmonies").clicked() {
-                            self.show_harmonies_dialog = true;
-                        }
-                        if ui.button("💾 Export...").clicked() {
-                            let fname = format!("{}.gpl", self.active_palette.name.to_lowercase().replace(' ', "-"));
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_file_name(&fname)
-                                .add_filter("GIMP Palette (.gpl)", &["gpl"])
-                                .add_filter("Color Table (.act)", &["act"])
-                                .add_filter("Hex Palette (.hex)", &["hex"])
-                                .add_filter("JASC-PAL (.pal)", &["pal"])
-                                .add_filter("JSON Palette (.json)", &["json"])
-                                .save_file()
-                                && let Ok(()) = self.active_palette.export_to_file(&path)
-                            {
-                                self.status_text = format!("Exported palette to {}", path.display());
-                            }
-                        }
-                    });
-                    if lock_changed {
-                        changed = true;
-                    }
-                });
-
-                // Tonal Cycling
-                ui.group(|ui| {
-                    ui.label("Tonal Cycling:");
-                    check_slider(ui, egui::Slider::new(&mut self.tonal_cycle_step, 0..=8).text("Cycle Step"), &mut changed, &mut preview_changed);
-                });
-
-                // Phase 8.2: Draggable & Reorderable Downstream Effects Stack
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Downstream Effects Stack (Layers):");
-                        if ui.button("🎲 Shuffle").on_hover_text("Randomize retro glitch, CRT, and bloom adjustments").clicked() {
-                            self.shuffle_adjustments();
-                            changed = true;
-                        }
-                        if ui.button("↺ Reset").on_hover_text("Reset stack to defaults").clicked() {
-                            self.effect_stack = EffectStack::default_stack();
-                            changed = true;
-                        }
-                    });
-
-                    let mut move_up = None;
-                    let mut move_down = None;
-                    let mut duplicate_node = None;
-                    let mut delete_node = None;
-                    let num_nodes = self.effect_stack.nodes.len();
-
-                    for (idx, node) in self.effect_stack.nodes.iter_mut().enumerate() {
-                        ui.group(|ui| {
-                            ui.horizontal(|ui| {
-                                changed |= ui.checkbox(&mut node.enabled, "").changed();
-                                ui.strong(&node.name);
-
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("🗑").on_hover_text("Delete layer").clicked() {
-                                        delete_node = Some(idx);
-                                    }
-                                    if ui.small_button("📋").on_hover_text("Duplicate layer").clicked() {
-                                        duplicate_node = Some(idx);
-                                    }
-                                    if idx + 1 < num_nodes && ui.small_button("⬇").on_hover_text("Move down").clicked() {
-                                        move_down = Some(idx);
-                                    }
-                                    if idx > 0 && ui.small_button("⬆").on_hover_text("Move up").clicked() {
-                                        move_up = Some(idx);
-                                    }
-                                });
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.label("Blend:");
-                                egui::ComboBox::from_id_salt(format!("blend_{}", node.id)).selected_text(node.blend_mode.name()).show_ui(ui, |ui| {
-                                    for mode in BlendMode::ALL {
-                                        if ui.selectable_value(&mut node.blend_mode, mode, mode.name()).clicked() {
-                                            changed = true;
-                                        }
-                                    }
-                                });
-                                ui.label("α:");
-                                check_slider(
-                                    ui,
-                                    egui::Slider::new(&mut node.opacity, 0.0..=1.0).show_value(true),
-                                    &mut changed,
-                                    &mut preview_changed,
-                                );
-                            });
-
-                            // Layer-specific parameter editors
-                            match &mut node.kind {
-                                EffectKind::Glow(glow) => {
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut glow.threshold, 50..=250).text("Threshold"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                    check_slider(ui, egui::Slider::new(&mut glow.radius, 1..=12).text("Radius"), &mut changed, &mut preview_changed);
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut glow.intensity, 0.1..=2.0).text("Intensity"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                }
-                                EffectKind::Chromatic(chroma) => {
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut chroma.shift_x, -15..=15).text("Shift X"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                    changed |= ui.checkbox(&mut chroma.radial, "Radial Shift").changed();
-                                }
-                                EffectKind::Glitch(glitch) => {
-                                    egui::ComboBox::from_id_salt(format!("glitch_mode_{}", node.id))
-                                        .selected_text(match glitch.mode {
-                                            JpegSubMode::BlockShift => "Block Shift",
-                                            JpegSubMode::ChannelSwap => "Channel Swap",
-                                            JpegSubMode::ScanLineOffset => "Scan Line Offset",
-                                            JpegSubMode::BlockScramble => "Block Scramble",
-                                            JpegSubMode::InterlaceCorruption => "Interlace Corruption",
-                                        })
-                                        .show_ui(ui, |ui| {
-                                            for (m, lbl) in [
-                                                (JpegSubMode::BlockShift, "Block Shift"),
-                                                (JpegSubMode::ChannelSwap, "Channel Swap"),
-                                                (JpegSubMode::ScanLineOffset, "Scan Line Offset"),
-                                                (JpegSubMode::BlockScramble, "Block Scramble"),
-                                                (JpegSubMode::InterlaceCorruption, "Interlace Corruption"),
-                                            ] {
-                                                if ui.selectable_value(&mut glitch.mode, m, lbl).clicked() {
-                                                    changed = true;
-                                                }
-                                            }
-                                        });
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut glitch.intensity, 0.05..=1.0).text("Intensity"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                }
-                                EffectKind::Crt(crt) => {
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut crt.scanline_intensity, 0.0..=1.0).text("Scanlines"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut crt.barrel_curvature, 0.0..=0.3).text("Barrel"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut crt.vignette_intensity, 0.0..=1.0).text("Vignette"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                }
-                                EffectKind::Blur(blur) => {
-                                    check_slider(ui, egui::Slider::new(&mut blur.sigma, 0.2..=5.0).text("Sigma"), &mut changed, &mut preview_changed);
-                                }
-                                EffectKind::Sharpen(sharpen) => {
-                                    check_slider(
-                                        ui,
-                                        egui::Slider::new(&mut sharpen.amount, 0.1..=3.0).text("Amount"),
-                                        &mut changed,
-                                        &mut preview_changed,
-                                    );
-                                }
-                                EffectKind::Lut3d(lut) => {
-                                    ui.label(format!("3D LUT: '{}' ({}³)", lut.title, lut.size));
-                                }
-                            }
-                        });
-                    }
-
-                    if let Some(idx) = move_up {
-                        self.effect_stack.move_up(idx);
-                        changed = true;
-                    }
-                    if let Some(idx) = move_down {
-                        self.effect_stack.move_down(idx);
-                        changed = true;
-                    }
-                    if let Some(idx) = duplicate_node {
-                        self.effect_stack.duplicate(idx);
-                        changed = true;
-                    }
-                    if let Some(idx) = delete_node {
-                        self.effect_stack.remove(idx);
-                        changed = true;
-                    }
-
-                    // Add Effect Layer Dropdown
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("add_effect_dropdown").selected_text("➕ Add Effect Layer...").show_ui(ui, |ui| {
-                            if ui.button("Epsilon Glow Bloom").clicked() {
-                                self.effect_stack.add(EffectNode::new(0, "Glow Bloom", EffectKind::Glow(EpsilonGlow::default())));
-                                changed = true;
-                            }
-                            if ui.button("Chromatic Aberration").clicked() {
-                                self.effect_stack.add(EffectNode::new(
-                                    0,
-                                    "Chromatic Aberration",
-                                    EffectKind::Chromatic(ChromaticAberration::default()),
-                                ));
-                                changed = true;
-                            }
-                            if ui.button("JPEG Glitch Core").clicked() {
-                                self.effect_stack.add(EffectNode::new(0, "JPEG Glitch", EffectKind::Glitch(JpegGlitchCore::default())));
-                                changed = true;
-                            }
-                            if ui.button("Vintage CRT Simulation").clicked() {
-                                self.effect_stack.add(EffectNode::new(0, "Vintage CRT", EffectKind::Crt(VintageCrtSimulation::default())));
-                                changed = true;
-                            }
-                            if ui.button("Gaussian Blur").clicked() {
-                                self.effect_stack.add(EffectNode::new(0, "Gaussian Blur", EffectKind::Blur(GaussianBlur::default())));
-                                changed = true;
-                            }
-                            if ui.button("Sharpen (Unsharp Mask)").clicked() {
-                                self.effect_stack.add(EffectNode::new(0, "Sharpen", EffectKind::Sharpen(Sharpen::default())));
-                                changed = true;
-                            }
-                        });
-                    });
-                });
-
-                // Temporal Noise & Animation
-                ui.group(|ui| {
-                    ui.label("Temporal Noise & Animation:");
-                    if ui.checkbox(&mut self.temporal_noise_enabled, "Live Noise Stream").changed() {
-                        changed = true;
-                    }
-                    if self.temporal_noise_enabled {
-                        egui::ComboBox::from_id_salt("temporal_pattern_picker")
-                            .selected_text(match self.temporal_pattern {
-                                TemporalNoisePattern::CrtScanBeamJitter => "CRT Scan Beam Jitter",
-                                TemporalNoisePattern::PhosphorGrainHum => "Phosphor Grain Hum",
-                                TemporalNoisePattern::InterlacedFieldShimmer => "Interlaced Field Shimmer",
-                                TemporalNoisePattern::LcdSubpixelGridDrift => "LCD Grid Drift",
-                                TemporalNoisePattern::VhsTapePhaseNoise => "VHS Phase Noise",
-                                TemporalNoisePattern::ThermalAnalogDrift => "Thermal Analog Drift",
-                                TemporalNoisePattern::StaticHashWhiteNoise => "Static Hash Noise",
-                                TemporalNoisePattern::BayerPhaseStepping => "Bayer Phase Stepping",
-                                TemporalNoisePattern::BlueNoiseTemporalJitter => "Blue Noise Jitter",
-                            })
-                            .show_ui(ui, |ui| {
-                                for (pat, label) in [
-                                    (TemporalNoisePattern::CrtScanBeamJitter, "CRT Scan Beam Jitter"),
-                                    (TemporalNoisePattern::PhosphorGrainHum, "Phosphor Grain Hum"),
-                                    (TemporalNoisePattern::InterlacedFieldShimmer, "Interlaced Field Shimmer"),
-                                    (TemporalNoisePattern::LcdSubpixelGridDrift, "LCD Grid Drift"),
-                                    (TemporalNoisePattern::VhsTapePhaseNoise, "VHS Phase Noise"),
-                                    (TemporalNoisePattern::ThermalAnalogDrift, "Thermal Analog Drift"),
-                                    (TemporalNoisePattern::StaticHashWhiteNoise, "Static Hash Noise"),
-                                    (TemporalNoisePattern::BayerPhaseStepping, "Bayer Phase Stepping"),
-                                    (TemporalNoisePattern::BlueNoiseTemporalJitter, "Blue Noise Jitter"),
-                                ] {
-                                    if ui.selectable_value(&mut self.temporal_pattern, pat, label).clicked() {
-                                        changed = true;
-                                    }
-                                }
-                            });
-
-                        check_slider(
-                            ui,
-                            egui::Slider::new(&mut self.temporal_intensity, 0.05..=1.0).text("Noise Intensity"),
-                            &mut changed,
-                            &mut preview_changed,
-                        );
-                    }
-                });
-
-                // Debounce and wheel settings
-                ui.checkbox(&mut self.debounce_mode, "Debounce Rendering");
-                ui.checkbox(&mut self.fine_wheel_increment, "Fine Wheel Increment");
-
-                if changed {
-                    self.record_undo_state();
-                    self.trigger_render();
-                } else if preview_changed {
-                    self.trigger_render_preview();
-                }
-            });
+        if changed {
+            self.record_undo_state();
+            self.trigger_render();
+        } else if preview_changed {
+            self.trigger_render_preview();
         }
 
         // Center Viewport Interactive Canvas
@@ -6723,13 +6826,33 @@ impl eframe::App for DitherCraftApp {
                     }
                 }
 
+                // Quick expander for collapsed left sidebar
+                if !self.show_left_sidebar && self.workflow_mode != WorkflowLayoutMode::ZenFocus {
+                    let expander_rect =
+                        egui::Rect::from_min_size(egui::pos2(available_rect.min.x + 16.0, available_rect.min.y + 16.0), egui::vec2(90.0, 32.0));
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(expander_rect), |ui| {
+                        egui::Frame::window(ui.style()).show(ui, |ui| {
+                            if ui.button("▶ Tools").on_hover_text("Expand Tools & Assets Sidebar (Ctrl+[)").clicked() {
+                                self.show_left_sidebar = true;
+                            }
+                        });
+                    });
+                }
+
                 // Floating Viewport HUD
-                let hud_size = egui::vec2(660.0, 34.0);
+                let hud_width = 660.0 + if !self.show_right_sidebar { 75.0 } else { 0.0 };
+                let hud_size = egui::vec2(hud_width, 34.0);
                 let hud_rect = egui::Rect::from_min_size(egui::pos2(available_rect.max.x - hud_size.x - 16.0, available_rect.min.y + 16.0), hud_size);
 
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(hud_rect), |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            if !self.show_right_sidebar && self.workflow_mode != WorkflowLayoutMode::ZenFocus {
+                                if ui.button("◀ DSP").on_hover_text("Expand DSP & Effects Sidebar (Ctrl+])").clicked() {
+                                    self.show_right_sidebar = true;
+                                }
+                                ui.separator();
+                            }
                             if ui.button("1:1").on_hover_text("Reset to 100%").clicked() {
                                 self.canvas_zoom = 1.0;
                                 self.canvas_pan = egui::Vec2::ZERO;
@@ -7205,7 +7328,7 @@ mod tests {
     #[test]
     fn test_command_palette_catalog_and_filtering() {
         let (tx, _rx) = channel();
-        let app = DitherCraftApp {
+        let mut app = DitherCraftApp {
             source_image: None,
             rendered_image: None,
             texture: None,
@@ -7366,6 +7489,10 @@ mod tests {
             preset_browser_search: String::new(),
             preset_browser_category: "All".into(),
             keymap_profile: "DitherCraft Native".into(),
+            show_left_sidebar: true,
+            show_right_sidebar: true,
+            left_panel_tab: LeftPanelTab::default(),
+            right_panel_tab: RightPanelTab::default(),
         };
 
         let catalog = app.build_command_catalog();
@@ -7380,6 +7507,33 @@ mod tests {
 
         let preset_matches: Vec<_> = catalog.iter().filter(|c| c.category == "Preset").collect();
         assert_eq!(preset_matches.len(), StudioPreset::bundled_presets().len());
+
+        // Test sidebar toggle and tab commands in catalog
+        let view_cmds: Vec<_> = catalog.iter().filter(|c| c.category == "View").collect();
+        assert!(view_cmds.iter().any(|c| c.title.contains("Toggle Left Tools Sidebar")));
+        assert!(view_cmds.iter().any(|c| c.title.contains("Toggle Right DSP Sidebar")));
+        assert!(view_cmds.iter().any(|c| c.title.contains("Tools & Masking")));
+        assert!(view_cmds.iter().any(|c| c.title.contains("Palette Studio")));
+        assert!(view_cmds.iter().any(|c| c.title.contains("Dithering Algorithm")));
+        assert!(view_cmds.iter().any(|c| c.title.contains("Layers & Effects Stack")));
+        assert!(view_cmds.iter().any(|c| c.title.contains("CRT & Temporal Noise")));
+
+        // Workflow mode layout presets configure sidebars correctly
+        app.set_workflow_mode(WorkflowLayoutMode::ZenFocus);
+        assert!(!app.show_left_sidebar);
+        assert!(!app.show_right_sidebar);
+
+        app.set_workflow_mode(WorkflowLayoutMode::PrintPrepress);
+        assert!(app.show_left_sidebar);
+        assert!(app.show_right_sidebar);
+        assert_eq!(app.left_panel_tab, LeftPanelTab::PaletteStudio);
+        assert_eq!(app.right_panel_tab, RightPanelTab::Algorithm);
+
+        app.set_workflow_mode(WorkflowLayoutMode::CrtArcade);
+        assert_eq!(app.right_panel_tab, RightPanelTab::CrtNoise);
+
+        app.set_workflow_mode(WorkflowLayoutMode::MaskWorkshop);
+        assert_eq!(app.left_panel_tab, LeftPanelTab::ToolsMasking);
     }
 
     #[test]
@@ -7598,6 +7752,10 @@ mod tests {
             preset_browser_search: String::new(),
             preset_browser_category: "All".into(),
             keymap_profile: "DitherCraft Native".into(),
+            show_left_sidebar: true,
+            show_right_sidebar: true,
+            left_panel_tab: LeftPanelTab::default(),
+            right_panel_tab: RightPanelTab::default(),
         };
 
         // Create 16x16 test image buffer
@@ -7785,6 +7943,10 @@ mod tests {
             preset_browser_search: String::new(),
             preset_browser_category: "All".into(),
             keymap_profile: "DitherCraft Native".into(),
+            show_left_sidebar: true,
+            show_right_sidebar: true,
+            left_panel_tab: LeftPanelTab::default(),
+            right_panel_tab: RightPanelTab::default(),
         };
 
         let load_res = app2.load_project_bundle(&temp_path);
@@ -7998,5 +8160,19 @@ mod tests {
             let pal = Palette::from_name(&p.palette_name);
             assert!(!pal.is_empty(), "Palette for preset {} should not be empty", p.name);
         }
+    }
+
+    #[test]
+    fn test_modular_dual_sidebar_and_tab_states() {
+        assert_eq!(LeftPanelTab::ALL.len(), 3);
+        assert_eq!(RightPanelTab::ALL.len(), 3);
+
+        assert_eq!(LeftPanelTab::ToolsMasking.label(), "🛠 Tools & Masking");
+        assert_eq!(LeftPanelTab::PaletteStudio.label(), "🎨 Palette Studio");
+        assert_eq!(LeftPanelTab::LevelsCurves.label(), "📈 Levels & Curves");
+
+        assert_eq!(RightPanelTab::Algorithm.label(), "⚡ Algorithm");
+        assert_eq!(RightPanelTab::EffectsStack.label(), "🥞 Layers & FX");
+        assert_eq!(RightPanelTab::CrtNoise.label(), "📺 CRT & Noise");
     }
 }
